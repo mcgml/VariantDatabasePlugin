@@ -8,6 +8,7 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 import java.lang.reflect.Method;
 import java.util.HashSet;
+import java.util.Iterator;
 
 import javax.ws.rs.*;
 import javax.ws.rs.Path;
@@ -22,6 +23,7 @@ import org.codehaus.jackson.map.ObjectMapper;
 
 import org.neo4j.graphdb.*;
 import org.neo4j.graphdb.NotFoundException;
+import org.neo4j.graphdb.impl.notification.NotificationDetail;
 
 @Path("/variantdatabase")
 public class VariantDatabasePlugin
@@ -78,6 +80,102 @@ public class VariantDatabasePlugin
 
                         jg.writeEndObject();
 
+                    }
+                }
+
+                jg.writeEndArray();
+
+                jg.flush();
+                jg.close();
+            }
+
+        };
+
+        return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+    }
+
+    @GET
+    @Path("/analyses")
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response getAnalyses() {
+
+        StreamingOutput stream = new StreamingOutput() {
+
+            @Override
+            public void write(OutputStream os) throws IOException, WebApplicationException {
+                JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
+
+                jg.writeStartArray();
+
+                try (Transaction tx = graphDb.beginTx()) {
+                    try (ResourceIterator<Node> sampleNodes = graphDb.findNodes(Neo4j.getSampleLabel())) {
+
+                        while (sampleNodes.hasNext()) {
+                            Node sampleNode = sampleNodes.next();
+
+                            for (Relationship relationship : sampleNode.getRelationships(Direction.OUTGOING, Neo4j.getHasAnalysisRelationship())) {
+                                Node runInfoNode = relationship.getEndNode();
+
+                                if (runInfoNode.hasLabel(Neo4j.getRunInfoLabel())){
+                                    jg.writeStartObject();
+                                    jg.writeStringField("SampleId", (String) sampleNode.getProperty("SampleId"));
+                                    jg.writeStringField("LibraryId", (String) runInfoNode.getProperty("LibraryId"));
+                                    jg.writeStringField("RunId", (String) runInfoNode.getProperty("RunId"));
+                                    jg.writeNumberField("RunInfoNodeId", runInfoNode.getId());
+                                    jg.writeEndObject();
+                                }
+                            }
+                        }
+
+                        sampleNodes.close();
+                    }
+                }
+
+                jg.writeEndArray();
+
+                jg.flush();
+                jg.close();
+            }
+
+        };
+
+        return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+    }
+
+    @GET
+    @Path("/panels")
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response getPanels() {
+
+        StreamingOutput stream = new StreamingOutput() {
+
+            @Override
+            public void write(OutputStream os) throws IOException, WebApplicationException {
+                JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
+
+                jg.writeStartArray();
+
+                try (Transaction tx = graphDb.beginTx()) {
+                    try (ResourceIterator<Node> virtualPanelNodes = graphDb.findNodes(Neo4j.getVirtualPanelLabel())) {
+
+                        while (virtualPanelNodes.hasNext()) {
+                            Node virtualPanelNode = virtualPanelNodes.next();
+
+                            for (Relationship relationship : virtualPanelNode.getRelationships(Direction.OUTGOING, Neo4j.getHasDesignedBy())) {
+                                Node userNode = relationship.getEndNode();
+
+                                if (userNode.hasLabel(Neo4j.getUserLabel())){
+                                    jg.writeStartObject();
+                                    jg.writeStringField("PanelName", (String) virtualPanelNode.getProperty("PanelName"));
+                                    jg.writeNumberField("PanelNodeId", virtualPanelNode.getId());
+                                    jg.writeNumberField("Date", (long) relationship.getProperty("Date"));
+                                    jg.writeStringField("UserName", (String) userNode.getProperty("UserName"));
+                                    jg.writeEndObject();
+                                }
+                            }
+                        }
+
+                        virtualPanelNodes.close();
                     }
                 }
 
@@ -252,13 +350,10 @@ public class VariantDatabasePlugin
 
                 jg.writeStartObject();
 
-                try (Transaction tx = graphDb.beginTx())
-                {
-                    try (ResourceIterator<Node> variants = graphDb.findNodes(Neo4j.getVariantLabel(), "VariantId", variantIdParameter.VariantId))
-                    {
+                try (Transaction tx = graphDb.beginTx()) {
+                    try (ResourceIterator<Node> variants = graphDb.findNodes(Neo4j.getVariantLabel(), "VariantId", variantIdParameter.VariantId)) {
 
-                        while (variants.hasNext())
-                        {
+                        while (variants.hasNext()) {
                             variantNode = variants.next();
                         }
 
@@ -266,6 +361,7 @@ public class VariantDatabasePlugin
                     }
 
                     jg.writeNumberField("VariantNodeId", variantNode.getId());
+                    jg.writeNumberField("Occurrence", getSeenTimes(variantNode));
                     if (variantNode.hasProperty("Id")) jg.writeStringField("dbSNP", (String) variantNode.getProperty("Id"));
 
                 }
