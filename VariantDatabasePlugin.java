@@ -8,7 +8,6 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 import java.lang.reflect.Method;
 import java.util.HashSet;
-import java.util.Iterator;
 
 import javax.ws.rs.*;
 import javax.ws.rs.Path;
@@ -23,7 +22,6 @@ import org.codehaus.jackson.map.ObjectMapper;
 
 import org.neo4j.graphdb.*;
 import org.neo4j.graphdb.NotFoundException;
-import org.neo4j.graphdb.impl.notification.NotificationDetail;
 
 @Path("/variantdatabase")
 public class VariantDatabasePlugin
