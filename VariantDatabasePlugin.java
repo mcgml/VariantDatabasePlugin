@@ -419,6 +419,7 @@ public class VariantDatabasePlugin
                     }
 
                     jg.writeNumberField("VariantNodeId", variantNode.getId());
+                    if (variantNode.hasProperty("VariantId")) jg.writeStringField("VariantId", variantNode.getProperty("VariantId").toString());
                     jg.writeNumberField("Occurrence", getSeenTimes(variantNode));
                     if (variantNode.hasProperty("Id")) jg.writeStringField("dbSNP", variantNode.getProperty("Id").toString());
 
