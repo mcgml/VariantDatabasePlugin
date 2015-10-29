@@ -113,9 +113,14 @@ public class VariantDatabasePlugin
                                 if (runInfoNode.hasLabel(Neo4j.getRunInfoLabel())){
                                     jg.writeStartObject();
                                     jg.writeStringField("SampleId", sampleNode.getProperty("SampleId").toString());
-                                    jg.writeStringField("LibraryId", runInfoNode.getProperty("LibraryId").toString());
+                                    jg.writeStringField("WorklistId", runInfoNode.getProperty("WorklistId").toString());
                                     jg.writeStringField("RunId", runInfoNode.getProperty("RunId").toString());
                                     jg.writeNumberField("RunInfoNodeId", runInfoNode.getId());
+                                    jg.writeStringField("SupplierPanelName", runInfoNode.getProperty("SupplierPanelName").toString());
+                                    jg.writeStringField("PipelineName", runInfoNode.getProperty("PipelineName").toString());
+                                    jg.writeNumberField("PipelineVersion", (int) runInfoNode.getProperty("PipelineVersion"));
+                                    jg.writeStringField("RemoteBamFilePath", runInfoNode.getProperty("RemoteBamFilePath").toString());
+                                    jg.writeStringField("RemoteVcfFilePath", runInfoNode.getProperty("RemoteVcfFilePath").toString());
                                     jg.writeEndObject();
                                 }
                             }
@@ -160,10 +165,10 @@ public class VariantDatabasePlugin
 
                                 if (userNode.hasLabel(Neo4j.getUserLabel())){
                                     jg.writeStartObject();
-                                    jg.writeStringField("PanelName", virtualPanelNode.getProperty("PanelName").toString());
+                                    jg.writeStringField("VirtualPanelName", virtualPanelNode.getProperty("VirtualPanelName").toString());
                                     jg.writeNumberField("PanelNodeId", virtualPanelNode.getId());
                                     jg.writeNumberField("Date", (long) relationship.getProperty("Date"));
-                                    jg.writeStringField("UserName", userNode.getProperty("UserName").toString());
+                                    jg.writeStringField("UserId", userNode.getProperty("UserId").toString());
                                     jg.writeEndObject();
                                 }
                             }
@@ -254,8 +259,8 @@ public class VariantDatabasePlugin
                                         jg.writeNumberField("Occurrence", seen);
                                         jg.writeNumberField("InternalFrequency", (double) Math.round((((double)seen / (panelRunTimes * 2)) * 100) * 100d) / 100d);
 
-                                        //id
-                                        if (variantNode.hasProperty("Id")) jg.writeStringField("Id", variantNode.getProperty("Id").toString());
+                                        //dbSNPId
+                                        if (variantNode.hasProperty("dbSNPId")) jg.writeStringField("dbSNPId", variantNode.getProperty("dbSNPId").toString());
 
                                         //user assigned pathogenicity
                                         date = -1; value = -1; //reset counters
@@ -419,7 +424,7 @@ public class VariantDatabasePlugin
                     jg.writeNumberField("VariantNodeId", variantNode.getId());
                     if (variantNode.hasProperty("VariantId")) jg.writeStringField("VariantId", variantNode.getProperty("VariantId").toString());
                     jg.writeNumberField("Occurrence", getSeenTimes(variantNode));
-                    if (variantNode.hasProperty("Id")) jg.writeStringField("dbSNP", variantNode.getProperty("Id").toString());
+                    if (variantNode.hasProperty("dbSNPId")) jg.writeStringField("dbSNPId", variantNode.getProperty("dbSNPId").toString());
 
                     jg.writeArrayFieldStart("History");
 
@@ -431,9 +436,9 @@ public class VariantDatabasePlugin
                             if (userNode.hasLabel(Neo4j.getUserLabel())) {
                                 jg.writeStartObject();
 
-                                if (relationship.hasProperty("Comment")) jg.writeStringField("Comment", relationship.getProperty("Comment").toString());
+                                if (userNode.hasProperty("UserId")) jg.writeStringField("UserId", userNode.getProperty("UserId").toString());
                                 if (relationship.hasProperty("Date")) jg.writeNumberField("Date", (long) relationship.getProperty("Date"));
-                                if (userNode.hasProperty("UserName")) jg.writeStringField("UserName", userNode.getProperty("UserName").toString());
+                                if (relationship.hasProperty("Comment")) jg.writeStringField("Comment", relationship.getProperty("Comment").toString());
 
                                 jg.writeEndObject();
                             }
@@ -444,9 +449,10 @@ public class VariantDatabasePlugin
                             if (userNode.hasLabel(Neo4j.getUserLabel())) {
                                 jg.writeStartObject();
 
-                                if (relationship.hasProperty("Value")) jg.writeStringField("Comment", "Added pathogenicity class: " + relationship.getProperty("Value").toString());
+                                if (userNode.hasProperty("UserId")) jg.writeStringField("UserId", userNode.getProperty("UserId").toString());
                                 if (relationship.hasProperty("Date")) jg.writeNumberField("Date", (long) relationship.getProperty("Date"));
-                                if (userNode.hasProperty("UserName")) jg.writeStringField("UserName", userNode.getProperty("UserName").toString());
+                                if (relationship.hasProperty("Comment")) jg.writeStringField("Comment", relationship.getProperty("Comment").toString());
+                                if (relationship.hasProperty("Value")) jg.writeNumberField("Value", (long) relationship.getProperty("Value"));
 
                                 jg.writeEndObject();
                             }
@@ -545,6 +551,12 @@ public class VariantDatabasePlugin
                     for (Relationship consequenceRel : variantNode.getRelationships(Direction.OUTGOING)) {
                         Node annotationNode = consequenceRel.getEndNode();
 
+                        //skip off-gene consequences
+                        String consequence = consequenceRel.getType().name();
+                        if (consequence.equals("HAS_DOWNSTREAM_GENE_VARIANT_CONSEQUENCE") || consequence.equals("HAS_UPSTREAM_GENE_VARIANT_CONSEQUENCE")){
+                            continue;
+                        }
+
                         if (annotationNode.hasLabel(Neo4j.getAnnotationLabel())){
 
                             for (Relationship inFeatureRel : annotationNode.getRelationships(Direction.OUTGOING, Neo4j.getHasInFeatureRelationship())) {
@@ -565,30 +577,44 @@ public class VariantDatabasePlugin
 
                                             jg.writeStartObject();
 
-                                            if (featureNode.hasProperty("FeatureId")) jg.writeStringField("Feature", featureNode.getProperty("FeatureId").toString());
+                                            //gene
+                                            if (symbolNode.hasProperty("SymbolId")) jg.writeStringField("SymbolId", symbolNode.getProperty("SymbolId").toString());
+                                            if (symbolNode.hasProperty("GeneId")) jg.writeStringField("GeneId", symbolNode.getProperty("GeneId").toString());
 
-                                            String biotype = biotypeRel.getType().name();
-                                            if (biotype.length() > 12) jg.writeStringField("Biotype", biotype.substring(4, biotype.length() - 8));
+                                            //transcript
+                                            if (featureNode.hasProperty("FeatureId")) jg.writeStringField("FeatureId", featureNode.getProperty("FeatureId").toString());
+                                            if (featureNode.hasProperty("FeatureType")) jg.writeStringField("FeatureType", featureNode.getProperty("FeatureType").toString());
+                                            if (featureNode.hasProperty("CCDSId")) jg.writeStringField("CCDSId", featureNode.getProperty("CCDSId").toString());
+                                            if (featureNode.hasProperty("Strand")) jg.writeBooleanField("Strand", (boolean) featureNode.getProperty("Strand"));
+                                            if (featureNode.hasProperty("TotalExons")) jg.writeNumberField("TotalExons", (short) featureNode.getProperty("TotalExons"));
+                                            if (featureNode.hasLabel(Neo4j.getCanonicalLabel())){
+                                                jg.writeBooleanField("Canonical", true);
+                                            } else {
+                                                jg.writeBooleanField("Canonical", false);
+                                            }
 
+                                            //annotation
+                                            if (annotationNode.hasProperty("HGVSc")) jg.writeStringField("HGVSc", annotationNode.getProperty("HGVSc").toString());
+                                            if (annotationNode.hasProperty("HGVSp")) jg.writeStringField("HGVSp", annotationNode.getProperty("HGVSp").toString());
                                             if (annotationNode.hasProperty("Exon")){
                                                 jg.writeNumberField("Location", (short) annotationNode.getProperty("Exon"));
                                             } else if (annotationNode.hasProperty("Intron")){
                                                 jg.writeNumberField("Location", (short) annotationNode.getProperty("Intron"));
                                             }
+                                            if (annotationNode.hasProperty("Sift")) jg.writeStringField("Sift", annotationNode.getProperty("Sift").toString());
+                                            if (annotationNode.hasProperty("Polyphen")) jg.writeStringField("Polyphen", annotationNode.getProperty("Polyphen").toString());
+                                            if (annotationNode.hasProperty("Codons")) jg.writeStringField("Codons", annotationNode.getProperty("Codons").toString());
 
-                                            String consequence = consequenceRel.getType().name();
-
+                                            //consequence
                                             if (consequence.length() > 16){
                                                 jg.writeStringField("Consequence", consequence.substring(4, consequence.length() - 12));
-                                            }else {
+                                            } else {
                                                 jg.writeStringField("Consequence", consequence);
                                             }
 
-                                            if (annotationNode.hasProperty("HGVSc")) jg.writeStringField("HGVSc", annotationNode.getProperty("HGVSc").toString());
-                                            if (annotationNode.hasProperty("HGVSp")) jg.writeStringField("HGVSp", annotationNode.getProperty("HGVSp").toString());
-                                            if (annotationNode.hasProperty("Sift")) jg.writeStringField("SIFT", annotationNode.getProperty("Sift").toString());
-                                            if (annotationNode.hasProperty("Polyphen")) jg.writeStringField("PolyPhen", annotationNode.getProperty("Polyphen").toString());
-                                            if (symbolNode.hasProperty("SymbolId")) jg.writeStringField("Symbol", symbolNode.getProperty("SymbolId").toString());
+                                            //biotype
+                                            String biotype = biotypeRel.getType().name();
+                                            if (biotype.length() > 12) jg.writeStringField("Biotype", biotype.substring(4, biotype.length() - 8));
 
                                             jg.writeEndObject();
 
