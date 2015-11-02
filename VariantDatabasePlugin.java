@@ -605,6 +605,55 @@ public class VariantDatabasePlugin
                                             if (annotationNode.hasProperty("Polyphen")) jg.writeStringField("Polyphen", annotationNode.getProperty("Polyphen").toString());
                                             if (annotationNode.hasProperty("Codons")) jg.writeStringField("Codons", annotationNode.getProperty("Codons").toString());
 
+                                            //domains
+                                            if (annotationNode.hasProperty("Pfam_domain")){
+                                                String[] domains = (String[]) annotationNode.getProperty("Pfam_domain");
+
+                                                jg.writeArrayFieldStart("Pfam_domain");
+
+                                                for (String domain : domains){
+                                                    jg.writeString(domain);
+                                                }
+
+                                                jg.writeEndArray();
+                                            }
+
+                                            if (annotationNode.hasProperty("hmmpanther")){
+                                                String[] domains = (String[]) annotationNode.getProperty("hmmpanther");
+
+                                                jg.writeArrayFieldStart("hmmpanther");
+
+                                                for (String domain : domains){
+                                                    jg.writeString(domain);
+                                                }
+
+                                                jg.writeEndArray();
+                                            }
+
+                                            if (annotationNode.hasProperty("prosite")){
+                                                String[] domains = (String[]) annotationNode.getProperty("prosite");
+
+                                                jg.writeArrayFieldStart("prosite");
+
+                                                for (String domain : domains){
+                                                    jg.writeString(domain);
+                                                }
+
+                                                jg.writeEndArray();
+                                            }
+
+                                            if (annotationNode.hasProperty("Superfamily_domains")){
+                                                String[] domains = (String[]) annotationNode.getProperty("Superfamily_domains");
+
+                                                jg.writeArrayFieldStart("Superfamily_domains");
+
+                                                for (String domain : domains){
+                                                    jg.writeString(domain);
+                                                }
+
+                                                jg.writeEndArray();
+                                            }
+
                                             //consequence
                                             if (consequence.length() > 16){
                                                 jg.writeStringField("Consequence", consequence.substring(4, consequence.length() - 12));
