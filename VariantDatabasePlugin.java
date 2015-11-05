@@ -428,39 +428,125 @@ public class VariantDatabasePlugin
 
                     jg.writeArrayFieldStart("History");
 
-                    for (Relationship relationship : variantNode.getRelationships(Direction.INCOMING)) {
+                    for (Relationship relationship : variantNode.getRelationships(Direction.INCOMING, Neo4j.getHasAssignedPathogenicityRelationship())) {
+                        Node userNode = relationship.getStartNode();
 
-                        if (relationship.isType(Neo4j.getHasUserCommentRelationship())){
-                            Node userNode = relationship.getStartNode();
+                        if (userNode.hasLabel(Neo4j.getUserLabel())) {
+                            jg.writeStartObject();
 
-                            if (userNode.hasLabel(Neo4j.getUserLabel())) {
-                                jg.writeStartObject();
+                            if (userNode.hasProperty("UserId")) jg.writeStringField("UserId", userNode.getProperty("UserId").toString());
+                            if (relationship.hasProperty("Date")) jg.writeNumberField("Date", (long) relationship.getProperty("Date"));
+                            if (relationship.hasProperty("Evidence")) jg.writeStringField("Evidence", relationship.getProperty("Evidence").toString());
+                            if (relationship.hasProperty("Classification")) jg.writeNumberField("Classification", (long) relationship.getProperty("Classification"));
 
-                                if (userNode.hasProperty("UserId")) jg.writeStringField("UserId", userNode.getProperty("UserId").toString());
-                                if (relationship.hasProperty("Date")) jg.writeNumberField("Date", (long) relationship.getProperty("Date"));
-                                if (relationship.hasProperty("Comment")) jg.writeStringField("Comment", relationship.getProperty("Comment").toString());
-
-                                jg.writeEndObject();
-                            }
-
-                        } else if (relationship.isType(Neo4j.getHasAssignedPathogenicityRelationship())){
-                            Node userNode = relationship.getStartNode();
-
-                            if (userNode.hasLabel(Neo4j.getUserLabel())) {
-                                jg.writeStartObject();
-
-                                if (userNode.hasProperty("UserId")) jg.writeStringField("UserId", userNode.getProperty("UserId").toString());
-                                if (relationship.hasProperty("Date")) jg.writeNumberField("Date", (long) relationship.getProperty("Date"));
-                                if (relationship.hasProperty("Comment")) jg.writeStringField("Comment", relationship.getProperty("Comment").toString());
-                                if (relationship.hasProperty("Value")) jg.writeNumberField("Value", (long) relationship.getProperty("Value"));
-
-                                jg.writeEndObject();
-                            }
+                            jg.writeEndObject();
                         }
 
                     }
 
                     jg.writeEndArray();
+                }
+
+                jg.writeEndObject();
+
+                jg.flush();
+                jg.close();
+            }
+
+        };
+
+        return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+
+    }
+
+    @POST
+    @Path("/featureinformation")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response getFeatureInformation(final String json) throws IOException {
+
+        StreamingOutput stream = new StreamingOutput() {
+
+            @Override
+            public void write(OutputStream os) throws IOException, WebApplicationException {
+
+                JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
+                FeatureIdParameter featureIdParameter = objectMapper.readValue(json, FeatureIdParameter.class);
+                Node featureNode = null;
+                boolean isPreferred = false;
+
+                jg.writeStartObject();
+
+                try (Transaction tx = graphDb.beginTx()) {
+
+                    //find variant
+                    try (ResourceIterator<Node> features = graphDb.findNodes(Neo4j.getFeatureLabel(), "FeatureId", featureIdParameter.FeatureId)) {
+
+                        while (features.hasNext()) {
+                            featureNode = features.next();
+                        }
+
+                        features.close();
+                    }
+
+                    jg.writeNumberField("FeatureNodeId", featureNode.getId());
+                    if (featureNode.hasProperty("FeatureId")) jg.writeStringField("FeatureId", featureNode.getProperty("FeatureId").toString());
+                    if (featureNode.hasProperty("Strand")){
+                        if ((boolean) featureNode.getProperty("Strand")){
+                            jg.writeStringField("Strand", "+");
+                        } else {
+                            jg.writeStringField("Strand", "-");
+                        }
+                    }
+                    if (featureNode.hasProperty("CCDSId")) jg.writeStringField("CCDSId", featureNode.getProperty("CCDSId").toString());
+                    if (featureNode.hasProperty("FeatureType")) jg.writeStringField("FeatureType", featureNode.getProperty("FeatureType").toString());
+                    if (featureNode.hasProperty("TotalExons")) jg.writeNumberField("TotalExons", (short) featureNode.getProperty("TotalExons"));
+
+                    jg.writeArrayFieldStart("History");
+
+                    //loop over feature preferences
+                    for (Relationship featurePreferenceRelationship : featureNode.getRelationships(Direction.OUTGOING, Neo4j.getHasFeaturePreferenceRelationship())) {
+                        Node featurePreferenceNode = featurePreferenceRelationship.getEndNode();
+
+                        if (featurePreferenceNode.hasLabel(Neo4j.getFeaturePreferenceLabel())) {
+
+                            Relationship addedByRelationship = featurePreferenceNode.getSingleRelationship(Neo4j.getAddedByRelationship(), Direction.OUTGOING);
+                            Node addedByUserNode = addedByRelationship.getEndNode();
+
+                            if (addedByUserNode.hasLabel(Neo4j.getUserLabel())){
+
+                                jg.writeStartObject();
+
+                                if (featurePreferenceNode.hasProperty("Evidence")) jg.writeStringField("Evidence", featurePreferenceNode.getProperty("Evidence").toString());
+
+                                if (addedByUserNode.hasProperty("UserId")) jg.writeStringField("AddedByUserId", addedByUserNode.getProperty("UserId").toString());
+                                if (addedByRelationship.hasProperty("Date")) jg.writeNumberField("AddedDate", (long) addedByRelationship.getProperty("Date"));
+
+                                Relationship authorisedByRelationship = featurePreferenceNode.getSingleRelationship(Neo4j.getAuthorisedByRelationship(), Direction.OUTGOING);
+
+                                if (authorisedByRelationship != null){
+                                    Node authorisedByUserNode = authorisedByRelationship.getEndNode();
+
+                                    if (authorisedByUserNode.hasLabel(Neo4j.getUserLabel())){
+                                        if (authorisedByUserNode.hasProperty("UserId")) jg.writeStringField("AuthorisedByUserId", authorisedByUserNode.getProperty("UserId").toString());
+                                        if (authorisedByRelationship.hasProperty("Date")) jg.writeNumberField("AuthorisedDate", (long) authorisedByRelationship.getProperty("Date"));
+
+                                        isPreferred = true;
+                                    }
+
+                                }
+
+                                jg.writeEndObject();
+
+                            }
+
+                        }
+
+                    }
+
+                    jg.writeEndArray();
+
+                    jg.writeBooleanField("Preferred", isPreferred);
                 }
 
                 jg.writeEndObject();
