@@ -510,36 +510,63 @@ public class VariantDatabasePlugin
 
                         if (featurePreferenceNode.hasLabel(Neo4j.getFeaturePreferenceLabel())) {
 
+                            jg.writeStartObject();
+
+                            boolean active = false;
+
+                            //get user activity
                             Relationship addedByRelationship = featurePreferenceNode.getSingleRelationship(Neo4j.getAddedByRelationship(), Direction.OUTGOING);
-                            Node addedByUserNode = addedByRelationship.getEndNode();
+                            Relationship removedByRelationship = featurePreferenceNode.getSingleRelationship(Neo4j.getRemovedByRelationship(), Direction.OUTGOING);
+                            Relationship addAuthorisedByRelationship = featurePreferenceNode.getSingleRelationship(Neo4j.getAddAuthorisedByRelationship(), Direction.OUTGOING);
+                            Relationship removeAuthorisedByRelationship = featurePreferenceNode.getSingleRelationship(Neo4j.getRemovedAuthorisedByRelationship(), Direction.OUTGOING);
 
-                            if (addedByUserNode.hasLabel(Neo4j.getUserLabel())){
+                            if (addedByRelationship != null){
+                                Node userNode = addedByRelationship.getEndNode();
 
-                                jg.writeStartObject();
-
-                                if (featurePreferenceNode.hasProperty("Evidence")) jg.writeStringField("Evidence", featurePreferenceNode.getProperty("Evidence").toString());
-
-                                if (addedByUserNode.hasProperty("UserId")) jg.writeStringField("AddedByUserId", addedByUserNode.getProperty("UserId").toString());
-                                if (addedByRelationship.hasProperty("Date")) jg.writeNumberField("AddedDate", (long) addedByRelationship.getProperty("Date"));
-
-                                Relationship authorisedByRelationship = featurePreferenceNode.getSingleRelationship(Neo4j.getAuthorisedByRelationship(), Direction.OUTGOING);
-
-                                if (authorisedByRelationship != null){
-                                    Node authorisedByUserNode = authorisedByRelationship.getEndNode();
-
-                                    if (authorisedByUserNode.hasLabel(Neo4j.getUserLabel())){
-                                        if (authorisedByUserNode.hasProperty("UserId")) jg.writeStringField("AuthorisedByUserId", authorisedByUserNode.getProperty("UserId").toString());
-                                        if (authorisedByRelationship.hasProperty("Date")) jg.writeNumberField("AuthorisedDate", (long) authorisedByRelationship.getProperty("Date"));
-
-                                        isPreferred = true;
-                                    }
-
+                                if (userNode.hasLabel(Neo4j.getUserLabel())){
+                                    if (addedByRelationship.hasProperty("Evidence")) jg.writeStringField("AddEvidence", addedByRelationship.getProperty("Evidence").toString());
+                                    if (addedByRelationship.hasProperty("Date")) jg.writeNumberField("AddedDate", (long) addedByRelationship.getProperty("Date"));
+                                    if (userNode.hasProperty("UserId")) jg.writeStringField("AddedByUserId", userNode.getProperty("UserId").toString());
                                 }
-
-                                jg.writeEndObject();
 
                             }
 
+                            if (addAuthorisedByRelationship != null){
+                                Node userNode = addAuthorisedByRelationship.getEndNode();
+                                active = true;
+
+                                if (userNode.hasLabel(Neo4j.getUserLabel())){
+                                    if (userNode.hasProperty("UserId")) jg.writeStringField("AddAuthorisedByUserId", userNode.getProperty("UserId").toString());
+                                    if (addAuthorisedByRelationship.hasProperty("Date")) jg.writeNumberField("AddAuthorisedDate", (long) addAuthorisedByRelationship.getProperty("Date"));
+                                }
+
+                            }
+
+                            if (removedByRelationship != null){
+                                Node userNode = removedByRelationship.getEndNode();
+
+                                if (userNode.hasLabel(Neo4j.getUserLabel())){
+                                    if (removedByRelationship.hasProperty("Evidence")) jg.writeStringField("RemovedEvidence", removedByRelationship.getProperty("Evidence").toString());
+                                    if (removedByRelationship.hasProperty("Date")) jg.writeNumberField("RemovedDate", (long) removedByRelationship.getProperty("Date"));
+                                    if (userNode.hasProperty("UserId")) jg.writeStringField("RemovedByUserId", userNode.getProperty("UserId").toString());
+                                }
+
+                            }
+
+                            if (removeAuthorisedByRelationship != null){
+                                Node userNode = removeAuthorisedByRelationship.getEndNode();
+                                active = false;
+
+                                if (userNode.hasLabel(Neo4j.getUserLabel())){
+                                    if (userNode.hasProperty("UserId")) jg.writeStringField("RemoveAuthorisedByUserId", userNode.getProperty("UserId").toString());
+                                    if (removeAuthorisedByRelationship.hasProperty("Date")) jg.writeNumberField("RemoveAuthorisedDate", (long) removeAuthorisedByRelationship.getProperty("Date"));
+                                }
+
+                            }
+
+                            if (active) isPreferred = true;
+
+                            jg.writeEndObject();
                         }
 
                     }
@@ -547,6 +574,7 @@ public class VariantDatabasePlugin
                     jg.writeEndArray();
 
                     jg.writeBooleanField("Preferred", isPreferred);
+
                 }
 
                 jg.writeEndObject();
