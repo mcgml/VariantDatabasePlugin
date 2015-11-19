@@ -366,7 +366,7 @@ public class VariantDatabasePlugin
                 jg.writeEndObject();
 
                 jg.writeStartObject();
-                jg.writeStringField("key", "NotHeterozygousVariants");
+                jg.writeStringField("key", "HomozygousVariants");
                 jg.writeNumberField("y", notHeterozygousVariants);
                 jg.writeEndObject();
 
@@ -376,12 +376,12 @@ public class VariantDatabasePlugin
                 jg.writeEndObject();
 
                 jg.writeStartObject();
-                jg.writeStringField("key", "NotRareVariants");
+                jg.writeStringField("key", "CommonVariants");
                 jg.writeNumberField("y", notRareVariants);
                 jg.writeEndObject();
 
                 jg.writeStartObject();
-                jg.writeStringField("key", "OtherVariants");
+                jg.writeStringField("key", "PassVariants");
                 jg.writeNumberField("y", otherVariants);
                 jg.writeEndObject();
 
