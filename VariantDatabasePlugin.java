@@ -250,6 +250,13 @@ public class VariantDatabasePlugin
                                         jg.writeStringField("VariantId", variant);
                                         reportedVariants.add(variant);
 
+                                        //population frequency
+                                        for (Neo4j.Population population : Neo4j.Population.values()) {
+                                            if (variantNode.hasProperty(population.toString())){
+                                                jg.writeNumberField(population.toString(), (double) Math.round( ((float) variantNode.getProperty(population.toString()) * 100) * 100d) / 100d);
+                                            }
+                                        }
+
                                         //inheritance
                                         String inheritance = inheritanceRel.getType().name();
                                         if (inheritance.length() > 12) jg.writeStringField("Inheritance", inheritance.substring(4, inheritance.length() - 8));
@@ -611,20 +618,21 @@ public class VariantDatabasePlugin
                 jg.writeStartArray();
 
                 try (Transaction tx = graphDb.beginTx()) {
-
                     Node variantNode = graphDb.getNodeById(nodeIdParameter.NodeId);
 
-                    for (Neo4j.Population population : Neo4j.Population.values()) {
+                    if (variantNode.hasLabel(Neo4j.getVariantLabel())){
+                        for (Neo4j.Population population : Neo4j.Population.values()) {
 
-                        if (variantNode.hasProperty(population.toString())){
+                            if (variantNode.hasProperty(population.toString())){
 
-                            jg.writeStartObject();
-                            jg.writeStringField("label", population.toString());
-                            jg.writeNumberField("value", (double) Math.round( ((float) variantNode.getProperty(population.toString()) * 100) * 100d) / 100d);
-                            jg.writeEndObject();
+                                jg.writeStartObject();
+                                jg.writeStringField("label", population.toString());
+                                jg.writeNumberField("value", (double) Math.round( ((float) variantNode.getProperty(population.toString()) * 100) * 100d) / 100d);
+                                jg.writeEndObject();
+
+                            }
 
                         }
-
                     }
 
                 }
@@ -632,6 +640,71 @@ public class VariantDatabasePlugin
                 jg.writeEndArray();
 
                 jg.writeEndObject();
+                jg.writeEndArray();
+
+                jg.flush();
+                jg.close();
+            }
+
+        };
+
+        return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+    }
+
+    @POST
+    @Path("/variantobservations")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response getVariantObservations(final String json) throws IOException {
+
+        StreamingOutput stream = new StreamingOutput() {
+
+            @Override
+            public void write(OutputStream os) throws IOException, WebApplicationException {
+
+                JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
+                NodeIdParameter nodeIdParameter = objectMapper.readValue(json, NodeIdParameter.class);
+
+                jg.writeStartArray();
+
+                try (Transaction tx = graphDb.beginTx()) {
+                    Node variantNode = graphDb.getNodeById(nodeIdParameter.NodeId);
+
+                    if (variantNode.hasLabel(Neo4j.getVariantLabel())){
+
+                        for (Relationship inheritanceRel : variantNode.getRelationships(Direction.INCOMING)) {
+                            Node runInfoNode = inheritanceRel.getStartNode();
+
+                            if (runInfoNode.hasLabel(Neo4j.getRunInfoLabel())){
+                                Node sampleNode = runInfoNode.getSingleRelationship(Neo4j.getHasAnalysisRelationship(), Direction.INCOMING).getStartNode();
+
+                                if (sampleNode.hasLabel(Neo4j.getSampleLabel())){
+                                    jg.writeStartObject();
+
+                                    jg.writeStringField("SampleId", sampleNode.getProperty("SampleId").toString());
+
+                                    String inheritance = inheritanceRel.getType().name();
+                                    if (inheritance.length() > 12) jg.writeStringField("Inheritance", inheritance.substring(4, inheritance.length() - 8));
+
+                                    jg.writeStringField("WorklistId", runInfoNode.getProperty("WorklistId").toString());
+                                    jg.writeStringField("RunId", runInfoNode.getProperty("RunId").toString());
+                                    jg.writeStringField("SupplierPanelName", runInfoNode.getProperty("SupplierPanelName").toString());
+                                    jg.writeStringField("PipelineName", runInfoNode.getProperty("PipelineName").toString());
+                                    jg.writeNumberField("PipelineVersion", (int) runInfoNode.getProperty("PipelineVersion"));
+                                    jg.writeStringField("RemoteVcfFilePath", runInfoNode.getProperty("RemoteVcfFilePath").toString());
+                                    jg.writeStringField("RemoteBamFilePath", runInfoNode.getProperty("RemoteBamFilePath").toString());
+
+                                    jg.writeEndObject();
+                                }
+
+                            }
+
+                        }
+
+                    }
+
+                }
+
                 jg.writeEndArray();
 
                 jg.flush();
