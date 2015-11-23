@@ -205,7 +205,7 @@ public class VariantDatabasePlugin
 
                 //filters
                 int artefactVariants = 0, benignVariants = 0, likelyBenignVariants = 0, unclassifiedVariants = 0, likelyPathogenicVariants = 0, pathogenicVariants = 0,
-                        notHeterozygousVariants = 0, notAutosomalVariants = 0, notRareVariants = 0, otherVariants = 0;
+                        notHeterozygousVariants = 0, notAutosomalVariants = 0, not1KGRareVariants = 0, notExACRareVariants = 0, otherVariants = 0;
 
                 long date,value;
                 HashSet<String> reportedVariants = new HashSet<>();
@@ -220,7 +220,6 @@ public class VariantDatabasePlugin
                 WorkflowParameters workflowParameters = objectMapper.readValue(json, WorkflowParameters.class);
 
                 try (Transaction tx = graphDb.beginTx()) {
-
                     Node runInfoNode = graphDb.getNodeById(workflowParameters.RunInfoNodeId);
 
                     for (Relationship inheritanceRel : runInfoNode.getRelationships(Direction.OUTGOING)) {
@@ -250,11 +249,29 @@ public class VariantDatabasePlugin
                                         jg.writeStringField("VariantId", variant);
                                         reportedVariants.add(variant);
 
-                                        //population frequency
-                                        for (Neo4j.Population population : Neo4j.Population.values()) {
+                                        //population frequency -- 1KG
+                                        for (Neo4j.onekGPopulation population : Neo4j.onekGPopulation.values()) {
                                             if (variantNode.hasProperty(population.toString())){
                                                 jg.writeNumberField(population.toString(), (double) Math.round( ((float) variantNode.getProperty(population.toString()) * 100) * 100d) / 100d);
                                             }
+                                        }
+
+                                        //population frequency -- ExAC
+                                        for (Neo4j.exACPopulation population : Neo4j.exACPopulation.values()) {
+                                            if (variantNode.hasProperty(population.toString())){
+                                                jg.writeNumberField(population.toString(), (double) Math.round( ((float) variantNode.getProperty(population.toString()) * 100) * 100d) / 100d);
+                                            }
+                                        }
+
+                                        //conservation scores
+                                        if (variantNode.hasProperty("GERP")){
+                                            jg.writeNumberField("GERP", (int) variantNode.getProperty("GERP"));
+                                        }
+                                        if (variantNode.hasProperty("Phylop")){
+                                            jg.writeNumberField("Phylop", (int) variantNode.getProperty("Phylop"));
+                                        }
+                                        if (variantNode.hasProperty("Phastcons")){
+                                            jg.writeNumberField("Phastcons", (int) variantNode.getProperty("Phastcons"));
                                         }
 
                                         //inheritance
@@ -310,11 +327,14 @@ public class VariantDatabasePlugin
                                         } else if (!variantNode.hasLabel(Neo4j.getAutoChromosomeLabel())) {
                                             jg.writeNumberField("Filter", 7);
                                             notAutosomalVariants++;
-                                        } else if (!isRareVariant(variantNode, 0.01)) {
+                                        } else if (!isExACRareVariant(variantNode, 0.01)) {
                                             jg.writeNumberField("Filter", 8);
-                                            notRareVariants++;
-                                        } else {
+                                            notExACRareVariants++;
+                                        } else if (!is1KGRareVariant(variantNode, 0.01)) {
                                             jg.writeNumberField("Filter", 9);
+                                            not1KGRareVariants++;
+                                        } else {
+                                            jg.writeNumberField("Filter", 10);
                                             otherVariants++;
                                         }
 
@@ -336,52 +356,57 @@ public class VariantDatabasePlugin
                 jg.writeStartArray();
 
                 jg.writeStartObject();
-                jg.writeStringField("key", "ArtefactVariants");
+                jg.writeStringField("key", "Artefact");
                 jg.writeNumberField("y", artefactVariants);
                 jg.writeEndObject();
 
                 jg.writeStartObject();
-                jg.writeStringField("key", "BenignVariants");
+                jg.writeStringField("key", "Benign");
                 jg.writeNumberField("y", benignVariants);
                 jg.writeEndObject();
 
                 jg.writeStartObject();
-                jg.writeStringField("key", "LikelyBenignVariants");
+                jg.writeStringField("key", "Likely Benign");
                 jg.writeNumberField("y", likelyBenignVariants);
                 jg.writeEndObject();
 
                 jg.writeStartObject();
-                jg.writeStringField("key", "UnclassifiedVariants");
+                jg.writeStringField("key", "Unclassified");
                 jg.writeNumberField("y", unclassifiedVariants);
                 jg.writeEndObject();
 
                 jg.writeStartObject();
-                jg.writeStringField("key", "LikelyPathogenicVariants");
+                jg.writeStringField("key", "Likely Pathogenic");
                 jg.writeNumberField("y", likelyPathogenicVariants);
                 jg.writeEndObject();
 
                 jg.writeStartObject();
-                jg.writeStringField("key", "PathogenicVariants");
+                jg.writeStringField("key", "Pathogenic");
                 jg.writeNumberField("y", pathogenicVariants);
                 jg.writeEndObject();
 
                 jg.writeStartObject();
-                jg.writeStringField("key", "HomozygousVariants");
+                jg.writeStringField("key", "Homozygous");
                 jg.writeNumberField("y", notHeterozygousVariants);
                 jg.writeEndObject();
 
                 jg.writeStartObject();
-                jg.writeStringField("key", "NotAutosomalVariants");
+                jg.writeStringField("key", "Not Autosomal");
                 jg.writeNumberField("y", notAutosomalVariants);
                 jg.writeEndObject();
 
                 jg.writeStartObject();
-                jg.writeStringField("key", "CommonVariants");
-                jg.writeNumberField("y", notRareVariants);
+                jg.writeStringField("key", "ExAC >1% Frequency");
+                jg.writeNumberField("y", notExACRareVariants);
                 jg.writeEndObject();
 
                 jg.writeStartObject();
-                jg.writeStringField("key", "PassVariants");
+                jg.writeStringField("key", "1KG >1% Frequency");
+                jg.writeNumberField("y", not1KGRareVariants);
+                jg.writeEndObject();
+
+                jg.writeStartObject();
+                jg.writeStringField("key", "Pass");
                 jg.writeNumberField("y", otherVariants);
                 jg.writeEndObject();
 
@@ -594,61 +619,6 @@ public class VariantDatabasePlugin
 
         return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
 
-    }
-
-    @POST
-    @Path("/populationfrequency")
-    @Consumes(MediaType.APPLICATION_JSON)
-    @Produces(MediaType.APPLICATION_JSON)
-    public Response getPopulationFrequency(final String json) throws IOException {
-
-        StreamingOutput stream = new StreamingOutput() {
-
-            @Override
-            public void write(OutputStream os) throws IOException, WebApplicationException {
-
-                JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
-                NodeIdParameter nodeIdParameter = objectMapper.readValue(json, NodeIdParameter.class);
-
-                jg.writeStartArray();
-                jg.writeStartObject();
-
-                //write population frequencies
-                jg.writeFieldName("values");
-                jg.writeStartArray();
-
-                try (Transaction tx = graphDb.beginTx()) {
-                    Node variantNode = graphDb.getNodeById(nodeIdParameter.NodeId);
-
-                    if (variantNode.hasLabel(Neo4j.getVariantLabel())){
-                        for (Neo4j.Population population : Neo4j.Population.values()) {
-
-                            if (variantNode.hasProperty(population.toString())){
-
-                                jg.writeStartObject();
-                                jg.writeStringField("label", population.toString());
-                                jg.writeNumberField("value", (double) Math.round( ((float) variantNode.getProperty(population.toString()) * 100) * 100d) / 100d);
-                                jg.writeEndObject();
-
-                            }
-
-                        }
-                    }
-
-                }
-
-                jg.writeEndArray();
-
-                jg.writeEndObject();
-                jg.writeEndArray();
-
-                jg.flush();
-                jg.close();
-            }
-
-        };
-
-        return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
     }
 
     @POST
@@ -923,12 +893,37 @@ public class VariantDatabasePlugin
 
         return tested;
     }
-    private boolean isRareVariant(Node variantNode, double maxAlleleFrequency){
+    private boolean is1KGRareVariant(Node variantNode, double maxAlleleFrequency){
 
         //filter variants
         try (Transaction tx = graphDb.beginTx()) {
 
-            for (Neo4j.Population population : Neo4j.Population.values()) {
+            for (Neo4j.onekGPopulation population : Neo4j.onekGPopulation.values()) {
+
+                try {
+
+                    Object frequency = variantNode.getProperty(population.toString());
+
+                    if ((float) frequency > maxAlleleFrequency){
+                        return false;
+                    }
+
+                } catch (NotFoundException e) {
+
+                }
+
+            }
+
+        }
+
+        return true;
+    }
+    private boolean isExACRareVariant(Node variantNode, double maxAlleleFrequency){
+
+        //filter variants
+        try (Transaction tx = graphDb.beginTx()) {
+
+            for (Neo4j.exACPopulation population : Neo4j.exACPopulation.values()) {
 
                 try {
 
