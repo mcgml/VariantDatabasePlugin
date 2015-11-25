@@ -7,8 +7,8 @@ import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 import java.lang.reflect.Method;
+import java.util.Date;
 import java.util.HashSet;
-import java.util.Map;
 
 import javax.ws.rs.*;
 import javax.ws.rs.Path;
@@ -472,10 +472,12 @@ public class VariantDatabasePlugin
                         if (pathogenicityNode.hasLabel(Neo4j.getPathogenicityLabel())) {
                             jg.writeStartObject();
 
+                            jg.writeNumberField("PathogenicityNodeId", pathogenicityNode.getId());
+
                             Relationship addedByRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getAddedByRelationship(), Direction.OUTGOING);
                             Relationship removedByRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getRemovedByRelationship(), Direction.OUTGOING);
                             Relationship addAuthorisedByRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getAddAuthorisedByRelationship(), Direction.OUTGOING);
-                            Relationship removeAuthorisedByRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getRemovedAuthorisedByRelationship(), Direction.OUTGOING);
+                            Relationship removeAuthorisedByRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getRemoveAuthorisedByRelationship(), Direction.OUTGOING);
 
                             if (addedByRelationship != null){
                                 Node userNode = addedByRelationship.getEndNode();
@@ -598,7 +600,7 @@ public class VariantDatabasePlugin
                             Relationship addedByRelationship = featurePreferenceNode.getSingleRelationship(Neo4j.getAddedByRelationship(), Direction.OUTGOING);
                             Relationship removedByRelationship = featurePreferenceNode.getSingleRelationship(Neo4j.getRemovedByRelationship(), Direction.OUTGOING);
                             Relationship addAuthorisedByRelationship = featurePreferenceNode.getSingleRelationship(Neo4j.getAddAuthorisedByRelationship(), Direction.OUTGOING);
-                            Relationship removeAuthorisedByRelationship = featurePreferenceNode.getSingleRelationship(Neo4j.getRemovedAuthorisedByRelationship(), Direction.OUTGOING);
+                            Relationship removeAuthorisedByRelationship = featurePreferenceNode.getSingleRelationship(Neo4j.getRemoveAuthorisedByRelationship(), Direction.OUTGOING);
 
                             if (addedByRelationship != null){
                                 Node userNode = addedByRelationship.getEndNode();
@@ -881,6 +883,219 @@ public class VariantDatabasePlugin
         return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
     }
 
+    @POST
+    @Path("/addvariantpathogenicity")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response addVariantPathogenicity(final String json) throws IOException {
+
+        StreamingOutput stream = new StreamingOutput() {
+
+            @Override
+            public void write(OutputStream os) throws IOException, WebApplicationException {
+
+                Parameters parameters = objectMapper.readValue(json, Parameters.class);
+
+                try (Transaction tx = graphDb.beginTx()) {
+
+                    Node variantNode = graphDb.getNodeById(parameters.VariantNodeId);
+                    Node userNode = graphDb.getNodeById(parameters.UserNodeId);
+
+                    if (variantNode.hasLabel(Neo4j.getVariantLabel()) && userNode.hasLabel(Neo4j.getUserLabel())){
+
+                        Date date = new Date();
+
+                        //create pathogenicity
+                        Node pathogenicityNode = graphDb.createNode(Neo4j.getPathogenicityLabel());
+                        variantNode.createRelationshipTo(pathogenicityNode, Neo4j.getHasPathogenicityRelationship());
+
+                        Relationship addedByRelationship = pathogenicityNode.createRelationshipTo(userNode, Neo4j.getAddedByRelationship());
+
+                        //add properties
+                        addedByRelationship.setProperty("Classification", parameters.Classification);
+                        addedByRelationship.setProperty("Date", date.getTime());
+                        if (parameters.Evidence != null) addedByRelationship.setProperty("Evidence", parameters.Evidence);
+
+                    }
+
+                    tx.success();
+                }
+
+            }
+
+        };
+
+        return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+    }
+
+    @POST
+    @Path("/removevariantpathogenicity")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response removeVariantPathogenicity(final String json) throws IOException {
+
+        StreamingOutput stream = new StreamingOutput() {
+
+            @Override
+            public void write(OutputStream os) throws IOException, WebApplicationException {
+
+                Parameters parameters = objectMapper.readValue(json, Parameters.class);
+
+                try (Transaction tx = graphDb.beginTx()) {
+
+                    Node pathogenicityNode = graphDb.getNodeById(parameters.PathogenicityNodeId);
+                    Node userNode = graphDb.getNodeById(parameters.UserNodeId);
+
+                    if (pathogenicityNode.hasLabel(Neo4j.getPathogenicityLabel()) && userNode.hasLabel(Neo4j.getUserLabel())){
+
+                        Date date = new Date();
+
+                        //remove pathogenicity
+                        Relationship removedByRelationship = pathogenicityNode.createRelationshipTo(userNode, Neo4j.getRemovedByRelationship());
+
+                        //add properties
+                        removedByRelationship.setProperty("Date", date.getTime());
+                        if (parameters.Evidence != null) removedByRelationship.setProperty("Evidence", parameters.Evidence);
+
+                    }
+
+                    tx.success();
+                }
+
+            }
+
+        };
+
+        return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+    }
+
+    @POST
+    @Path("/authorisevariantpathogenicity")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response authoriseVariantPathogenicity(final String json) throws IOException {
+
+        StreamingOutput stream = new StreamingOutput() {
+
+            @Override
+            public void write(OutputStream os) throws IOException, WebApplicationException {
+
+                Parameters parameters = objectMapper.readValue(json, Parameters.class);
+
+                try (Transaction tx = graphDb.beginTx()) {
+
+                    Node pathogenicityNode = graphDb.getNodeById(parameters.PathogenicityNodeId);
+                    Node userNode = graphDb.getNodeById(parameters.UserNodeId);
+
+                    if (pathogenicityNode.hasLabel(Neo4j.getPathogenicityLabel()) && userNode.hasLabel(Neo4j.getUserLabel())){
+
+                        Date date = new Date();
+
+                        if (parameters.AddorRemove){
+                            Relationship relationship = pathogenicityNode.createRelationshipTo(userNode, Neo4j.getAddAuthorisedByRelationship());
+                            relationship.setProperty("Date", date.getTime());
+                        } else {
+                            Relationship relationship = pathogenicityNode.createRelationshipTo(userNode, Neo4j.getRemoveAuthorisedByRelationship());
+                            relationship.setProperty("Date", date.getTime());
+                        }
+
+                    }
+
+                    tx.success();
+                }
+
+            }
+
+        };
+
+        return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+    }
+
+    @GET
+    @Path("/getnewpathogenicitiesforauthorisation")
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response getNewPathogenicitiesForAuthorisation(final String json) throws IOException {
+
+        StreamingOutput stream = new StreamingOutput() {
+
+            @Override
+            public void write(OutputStream os) throws IOException, WebApplicationException {
+
+                JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
+
+                jg.writeStartArray();
+
+                try (Transaction tx = graphDb.beginTx()) {
+                    try (ResourceIterator<Node> pathogenicityNodeIterator = graphDb.findNodes(Neo4j.getPathogenicityLabel())) {
+
+                        while (pathogenicityNodeIterator.hasNext()) {
+                            Node pathogenicityNode = pathogenicityNodeIterator.next();
+
+                            Relationship addedByRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getAddedByRelationship(), Direction.OUTGOING);
+                            Relationship removedByRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getRemovedByRelationship(), Direction.OUTGOING);
+                            Relationship addAuthorisedByRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getAddAuthorisedByRelationship(), Direction.OUTGOING);
+                            Relationship removeAuthorisedByRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getRemoveAuthorisedByRelationship(), Direction.OUTGOING);
+                            Relationship hasPathogenicityRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getHasPathogenicityRelationship(), Direction.INCOMING);
+
+                            if (addedByRelationship != null && removedByRelationship == null && addAuthorisedByRelationship == null && removeAuthorisedByRelationship == null){
+                                Node userNode = addedByRelationship.getEndNode();
+                                Node variantNode = hasPathogenicityRelationship.getStartNode();
+
+                                if (userNode.hasLabel(Neo4j.getUserLabel()) && variantNode.hasLabel(Neo4j.getVariantLabel())){
+
+                                    jg.writeStartObject();
+
+                                    if (variantNode.hasProperty("VariantId")) jg.writeStringField("VariantId", variantNode.getProperty("VariantId").toString());
+                                    jg.writeNumberField("PathogenicityNodeId", pathogenicityNode.getId());
+                                    if (addedByRelationship.hasProperty("Classification")) jg.writeNumberField("Classification", (int) addedByRelationship.getProperty("Classification"));
+                                    jg.writeBooleanField("AddAction", true);
+                                    if (userNode.hasProperty("UserId")) jg.writeStringField("UserId", userNode.getProperty("UserId").toString());
+                                    if (addedByRelationship.hasProperty("Date")) jg.writeNumberField("Date", (long) addedByRelationship.getProperty("Date"));
+                                    if (addedByRelationship.hasProperty("Evidence")) jg.writeStringField("Evidence", addedByRelationship.getProperty("Evidence").toString());
+
+                                    jg.writeEndObject();
+
+                                }
+
+                            } else if (addedByRelationship != null && removedByRelationship != null && removeAuthorisedByRelationship == null){
+                                Node userNode = removedByRelationship.getEndNode();
+                                Node variantNode = hasPathogenicityRelationship.getStartNode();
+
+                                if (userNode.hasLabel(Neo4j.getUserLabel()) && variantNode.hasLabel(Neo4j.getVariantLabel())){
+
+                                    jg.writeStartObject();
+
+                                    if (variantNode.hasProperty("VariantId")) jg.writeStringField("VariantId", variantNode.getProperty("VariantId").toString());
+                                    jg.writeNumberField("PathogenicityNodeId", pathogenicityNode.getId());
+                                    if (addedByRelationship.hasProperty("Classification")) jg.writeNumberField("Classification", (int) addedByRelationship.getProperty("Classification"));
+                                    jg.writeBooleanField("AddAction", false);
+                                    if (userNode.hasProperty("UserId")) jg.writeStringField("UserId", userNode.getProperty("UserId").toString());
+                                    if (removedByRelationship.hasProperty("Date")) jg.writeNumberField("Date", (long) removedByRelationship.getProperty("Date"));
+                                    if (removedByRelationship.hasProperty("Evidence")) jg.writeStringField("Evidence", removedByRelationship.getProperty("Evidence").toString());
+
+                                    jg.writeEndObject();
+
+                                }
+
+                            }
+
+                        }
+
+                    }
+                }
+
+                jg.writeEndArray();
+
+                jg.flush();
+                jg.close();
+
+            }
+
+        };
+
+        return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+    }
+
     //helper functions
     private int getSeenTimes(Node variantNode){
 
@@ -985,15 +1200,16 @@ public class VariantDatabasePlugin
 
                 if (pathogenicityNode.hasLabel(Neo4j.getPathogenicityLabel())) {
 
+                    Relationship addedByRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getAddedByRelationship(), Direction.OUTGOING);
                     Relationship addAuthorisedByRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getAddAuthorisedByRelationship(), Direction.OUTGOING);
-                    Relationship removeAuthorisedByRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getRemovedAuthorisedByRelationship(), Direction.OUTGOING);
+                    Relationship removeAuthorisedByRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getRemoveAuthorisedByRelationship(), Direction.OUTGOING);
 
                     if (addAuthorisedByRelationship != null) {
                         Node userNode = addAuthorisedByRelationship.getEndNode();
 
                         if (userNode.hasLabel(Neo4j.getUserLabel())) {
-                            if (pathogenicityNode.hasProperty("Classification")){
-                                classification = (int) pathogenicityNode.getProperty("Classification");
+                            if (addedByRelationship.hasProperty("Classification")){
+                                classification = (int) addedByRelationship.getProperty("Classification");
                             }
                         }
                     }
