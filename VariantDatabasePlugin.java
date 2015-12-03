@@ -668,6 +668,7 @@ public class VariantDatabasePlugin
                                             writeVariantInformation(variantNode, jg);
                                             jg.writeStringField("Inheritance", getVariantInheritance(inheritanceRel.getType().name()));
                                             jg.writeNumberField("Occurrence", variantOccurrence);
+                                            jg.writeNumberField("Frequency", getVariantInternalFrequency(panelOccurrence, variantOccurrence));
 
                                             //stratify variants
                                             classification = getVariantPathogenicityClassification(variantNode);
@@ -1032,8 +1033,9 @@ public class VariantDatabasePlugin
 
             jg.writeNumberField("VariantNodeId", variantNode.getId());
 
-            if (variantNode.hasProperty("VariantId"))
+            if (variantNode.hasProperty("VariantId")) {
                 jg.writeStringField("VariantId", variantNode.getProperty("VariantId").toString());
+            }
             if (variantNode.hasProperty("dbSNPId")){
                 jg.writeStringField("dbSNPId", variantNode.getProperty("dbSNPId").toString());
             }
