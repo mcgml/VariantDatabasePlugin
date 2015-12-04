@@ -13,5 +13,7 @@ public class Parameters {
     public long PathogenicityNodeId;
     public int Classification;
     public String Evidence;
+    public String VirtualPanelName;
+    public String[] VirtualPanelList;
     public boolean AddorRemove;
 }

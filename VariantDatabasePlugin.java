@@ -9,6 +9,7 @@ import java.lang.annotation.Target;
 import java.lang.reflect.Method;
 import java.nio.charset.Charset;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.HashSet;
 
 import javax.ws.rs.*;
@@ -25,7 +26,7 @@ import org.codehaus.jackson.map.ObjectMapper;
 import org.neo4j.graphdb.*;
 import org.neo4j.graphdb.NotFoundException;
 
-//todo fix internal frequency
+//todo mask interal frequency for poorly sampled regions
 
 @Path("/variantdatabase")
 public class VariantDatabasePlugin
@@ -608,6 +609,96 @@ public class VariantDatabasePlugin
     }
 
     @POST
+    @Path("/addvirtualpanel")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response addVirtualPanel(final String json) throws IOException {
+
+        Date date = new Date();
+        HashMap<String, Object> properties = new HashMap<>();
+        Parameters parameters = objectMapper.readValue(json, Parameters.class);
+
+        try (Transaction tx = graphDb.beginTx()) {
+            Node userNode = graphDb.getNodeById(parameters.UserNodeId);
+
+            if (userNode.hasLabel(Neo4j.getUserLabel())){
+
+                //make panel node
+                properties.put("VirtualPanelName", parameters.VirtualPanelName);
+                Node virtualPanelNode = Neo4j.addNode(graphDb, Neo4j.getVirtualPanelLabel(), properties);
+                properties.clear();
+
+                //link to user
+                Relationship designedByRelationship = virtualPanelNode.createRelationshipTo(userNode, Neo4j.getHasDesignedBy());
+                designedByRelationship.setProperty("Date", date.getTime());
+
+                //link to genes
+                for (String gene : parameters.VirtualPanelList){
+
+                    //match or create gene
+                    Node geneNode = Neo4j.matchOrCreateUniqueNode(graphDb, Neo4j.getSymbolLabel(), "SymbolId", gene);
+
+                    //link to virtual panel
+                    virtualPanelNode.createRelationshipTo(geneNode, Neo4j.getHasContainsSymbolRelationship());
+                }
+
+
+            }
+
+            tx.success();
+        } catch (UnsupportedOperationException e){
+            return Response
+                    .status(Response.Status.BAD_REQUEST)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        }
+
+        return Response
+                .status(Response.Status.OK)
+                .build();
+    }
+
+    @POST
+    @Path("/getvirtualpanelgenes")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response getVirtualPanelGenes(final String json) throws IOException {
+
+        StreamingOutput stream = new StreamingOutput() {
+
+            @Override
+            public void write(OutputStream os) throws IOException, WebApplicationException {
+
+                JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
+                Parameters parameters = objectMapper.readValue(json, Parameters.class);
+
+                jg.writeStartArray();
+
+                try (Transaction tx = graphDb.beginTx()) {
+                    Node panelNode = graphDb.getNodeById(parameters.PanelNodeId);
+
+                    for (Relationship containsSymbol : panelNode.getRelationships(Direction.OUTGOING, Neo4j.getHasContainsSymbol())){
+                        Node symbolNode = containsSymbol.getEndNode();
+
+                        if (symbolNode.hasLabel(Neo4j.getSymbolLabel())){
+                            jg.writeString(symbolNode.getProperty("SymbolId").toString());
+                        }
+
+                    }
+                }
+
+                jg.writeEndArray();
+
+                jg.flush();
+                jg.close();
+            }
+
+        };
+
+        return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+    }
+
+    @POST
     @Path("/autosomaldominantworkflowv1")
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
@@ -617,7 +708,7 @@ public class VariantDatabasePlugin
         StreamingOutput stream = new StreamingOutput() {
 
             @Override
-            public void write(OutputStream os) throws IOException, WebApplicationException {
+            public void write(OutputStream os) throws IOException {
 
                 JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
 
