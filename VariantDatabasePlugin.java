@@ -699,6 +699,42 @@ public class VariantDatabasePlugin
     }
 
     @POST
+    @Path("/getaccountinformation")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response getUserInformation(final String json) throws IOException {
+
+        StreamingOutput stream = new StreamingOutput() {
+
+            @Override
+            public void write(OutputStream os) throws IOException, WebApplicationException {
+
+                JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
+                Parameters parameters = objectMapper.readValue(json, Parameters.class);
+
+                try (Transaction tx = graphDb.beginTx()) {
+                    Node userNode = graphDb.getNodeById(parameters.UserNodeId);
+
+                    if (userNode.hasLabel(Neo4j.getUserLabel())){
+
+                        jg.writeStartObject();
+                        writeUserInformation(userNode, jg);
+                        jg.writeEndObject();
+
+                    }
+
+                }
+
+                jg.flush();
+                jg.close();
+            }
+
+        };
+
+        return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+    }
+
+    @POST
     @Path("/autosomaldominantworkflowv1")
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
@@ -1030,6 +1066,19 @@ public class VariantDatabasePlugin
     }
 
     //write functions
+    private void writeUserInformation(Node userNode, JsonGenerator jg) throws IOException {
+        try (Transaction tx = graphDb.beginTx()) {
+
+            jg.writeNumberField("UserNodeId", userNode.getId());
+            if (userNode.hasProperty("UserId")) jg.writeStringField("UserId", userNode.getProperty("UserId").toString());
+            if (userNode.hasProperty("AccountType")) jg.writeStringField("AccountType", userNode.getProperty("AccountType").toString());
+            if (userNode.hasProperty("FullName")) jg.writeStringField("FullName", userNode.getProperty("FullName").toString());
+            if (userNode.hasProperty("JobTitle")) jg.writeStringField("JobTitle", userNode.getProperty("JobTitle").toString());
+            if (userNode.hasProperty("EmailAddress")) jg.writeStringField("EmailAddress", userNode.getProperty("EmailAddress").toString());
+            if (userNode.hasProperty("ContactNumber")) jg.writeStringField("ContactNumber", userNode.getProperty("ContactNumber").toString());
+
+        }
+    }
     private void writeSampleInformation(Node sampleNode, JsonGenerator jg) throws IOException {
         try (Transaction tx = graphDb.beginTx()) {
 
