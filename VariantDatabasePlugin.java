@@ -699,7 +699,7 @@ public class VariantDatabasePlugin
     }
 
     @POST
-    @Path("/getaccountinformation")
+    @Path("/getuserinformation")
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
     public Response getUserInformation(final String json) throws IOException {
