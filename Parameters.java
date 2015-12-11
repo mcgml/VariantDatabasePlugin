@@ -15,5 +15,6 @@ public class Parameters {
     public String Evidence;
     public String VirtualPanelName;
     public String[] VirtualPanelList;
+    public long[] ExcludedDatasetsRunId;
     public boolean AddorRemove;
 }
