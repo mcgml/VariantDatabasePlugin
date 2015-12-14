@@ -6,15 +6,16 @@ package nhs.genetics.cardiff;
 public class Parameters {
     public String FeatureId;
     public String VariantId;
-    public long RunInfoNodeId;
-    public long PanelNodeId;
-    public long VariantNodeId;
-    public long UserNodeId;
-    public long PathogenicityNodeId;
-    public int Classification;
+    public Long RunInfoNodeId;
+    public Long VariantNodeId;
+    public Long UserNodeId;
+    public Long PathogenicityNodeId;
+    public Integer Classification;
     public String Evidence;
     public String VirtualPanelName;
     public String[] VirtualPanelList;
-    public long[] ExcludedDatasetsRunId;
-    public boolean AddorRemove;
+    public Long[] excludedRunIds;
+    public Long[] panelNodeIds;
+    public Long PanelNodeId;
+    public Boolean AddorRemove;
 }
