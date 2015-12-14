@@ -40,6 +40,15 @@ public class VariantDatabasePlugin
         this.methods = this.getClass().getMethods();
     }
 
+    @POST
+    @Path("/returninputjson")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response returnInputJson(final String json) throws IOException {
+        return Response.status( Response.Status.OK ).entity(
+                (json).getBytes( Charset.forName("UTF-8") ) ).build();
+    }
+
     @Retention(RetentionPolicy.RUNTIME)
     @Target(ElementType.METHOD)
     public @interface Workflow {
@@ -917,15 +926,6 @@ public class VariantDatabasePlugin
         };
 
         return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
-    }
-
-    @POST
-    @Path("/returninputjson")
-    @Consumes(MediaType.APPLICATION_JSON)
-    @Produces(MediaType.APPLICATION_JSON)
-    public Response returnInputJson(final String json) throws IOException {
-        return Response.status( Response.Status.OK ).entity(
-                (json).getBytes( Charset.forName("UTF-8") ) ).build();
     }
 
     //helper functions
