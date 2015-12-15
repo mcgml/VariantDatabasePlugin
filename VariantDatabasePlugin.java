@@ -219,7 +219,7 @@ public class VariantDatabasePlugin
                         variants.close();
                     }
 
-                    int variantOccurrence = getVariantOccurrence(variantNode);
+                    int variantOccurrence = getGlobalVariantOccurrence(variantNode);
 
                     writeVariantInformation(variantNode, jg);
                     writeVariantHistory(variantNode, jg);
@@ -758,7 +758,7 @@ public class VariantDatabasePlugin
                 //filters
                 int benignVariants = 0, likelyBenignVariants = 0, unclassifiedVariants = 0, likelyPathogenicVariants = 0, pathogenicVariants = 0,
                         notHeterozygousVariants = 0, notAutosomalVariants = 0, not1KGRareVariants = 0, notExACRareVariants = 0, otherVariants = 0,
-                        classification, panelOccurrence = getPanelOccurrence("");
+                        classification;
                 HashSet<String> reportedVariants = new HashSet<>();
                 HashSet<Long> excludedRunInfoNodeIds = null;
                 HashSet<Long> panelNodeIds = null;
@@ -777,7 +777,9 @@ public class VariantDatabasePlugin
                 jg.writeStartArray();
 
                 try (Transaction tx = graphDb.beginTx()) {
+
                     Node runInfoNode = graphDb.getNodeById(parameters.RunInfoNodeId);
+                    int panelOccurrence = getPanelOccurrence(runInfoNode.getProperty("Assay").toString());
 
                     for (Relationship inheritanceRel : runInfoNode.getRelationships(Direction.OUTGOING)) {
                         Node variantNode = inheritanceRel.getEndNode();
@@ -807,12 +809,14 @@ public class VariantDatabasePlugin
 
                         jg.writeStartObject();
 
-                        int variantOccurrence = getVariantOccurrence(variantNode);
+                        int variantOccurrence = getGlobalVariantOccurrence(variantNode);
 
                         writeVariantInformation(variantNode, jg);
                         jg.writeStringField("Inheritance", getVariantInheritance(inheritanceRel.getType().name()));
                         jg.writeNumberField("Occurrence", variantOccurrence);
                         jg.writeNumberField("Frequency", getVariantInternalFrequency(panelOccurrence, variantOccurrence));
+                        jg.writeNumberField("panelOccurrence", panelOccurrence);
+                        jg.writeNumberField("variantOccurrence", variantOccurrence);
 
                         //stratify variants
                         classification = getVariantPathogenicityClassification(variantNode);
@@ -929,7 +933,7 @@ public class VariantDatabasePlugin
     }
 
     //helper functions
-    private int getVariantOccurrence(Node variantNode){
+    private int getGlobalVariantOccurrence(Node variantNode){
 
         int seen = 0;
 
@@ -945,28 +949,62 @@ public class VariantDatabasePlugin
 
         return seen;
     }
-    private int getPanelOccurrence(String panelName){ //todo split out by panel name (i.e. TruSight Cancer)
-        int tested = 0;
+    private int getAssayVariantOccurrence(Node variantNode, String assay){
+        int seen = 0;
+
+        if (assay == null)
+            return 0;
 
         try (Transaction tx = graphDb.beginTx()) {
-            try (ResourceIterator<Node> analyses = graphDb.findNodes(Neo4j.getRunInfoLabel())) {
+            for (Relationship relationship : variantNode.getRelationships(Direction.INCOMING)) {
 
-                while (analyses.hasNext()) {
-                    Node analysisNode = analyses.next();
+                if (relationship.isType(Neo4j.getHasHetVariantRelationship())) {
+                    Node runInfoNode = relationship.getStartNode();
 
-                    //try {
+                    if (runInfoNode.hasLabel(Neo4j.getRunInfoLabel())) {
+                        if (runInfoNode.hasProperty("Assay")) {
+                            if (runInfoNode.getProperty("Assay").toString().equals(assay)) {
+                                seen += 1;
+                            }
+                        }
+                    }
 
-                    //if (analysisNode.getProperties("PanelName").toString().equals(panelName)){
-                    tested++;
-                    //}
+                } else if (relationship.isType(Neo4j.getHasHomVariantRelationship())) {
+                    Node runInfoNode = relationship.getStartNode();
 
-                    //} catch (NotFoundException e){
-
-                    //}
+                    if (runInfoNode.hasLabel(Neo4j.getRunInfoLabel())){
+                        if (runInfoNode.hasProperty("Assay")){
+                            if (runInfoNode.getProperty("Assay").toString().equals(assay)){
+                                seen += 2;
+                            }
+                        }
+                    }
 
                 }
 
-                analyses.close();
+            }
+        }
+
+        return seen;
+    }
+    private int getPanelOccurrence(String assay){
+        int tested = 0;
+
+        try (Transaction tx = graphDb.beginTx()) {
+            try (ResourceIterator<Node> runInfoNodes = graphDb.findNodes(Neo4j.getRunInfoLabel())) {
+
+                while (runInfoNodes.hasNext()) {
+                    Node runInfoNode = runInfoNodes.next();
+
+                    if (runInfoNode.hasProperty("Assay")){
+                        if (runInfoNode.getProperty("Assay").toString().equals(assay)){
+                            tested++;
+                        }
+                    }
+
+                }
+
+                runInfoNodes.close();
             }
         }
 
@@ -1152,10 +1190,10 @@ public class VariantDatabasePlugin
 
             if (runInfoNode.hasProperty("WorklistId"))
                 jg.writeStringField("WorklistId", runInfoNode.getProperty("WorklistId").toString());
-            if (runInfoNode.hasProperty("RunId"))
-                jg.writeStringField("RunId", runInfoNode.getProperty("RunId").toString());
-            if (runInfoNode.hasProperty("SupplierPanelName"))
-                jg.writeStringField("SupplierPanelName", runInfoNode.getProperty("SupplierPanelName").toString());
+            if (runInfoNode.hasProperty("SeqId"))
+                jg.writeStringField("SeqId", runInfoNode.getProperty("SeqId").toString());
+            if (runInfoNode.hasProperty("Assay"))
+                jg.writeStringField("Assay", runInfoNode.getProperty("Assay").toString());
             if (runInfoNode.hasProperty("PipelineName"))
                 jg.writeStringField("PipelineName", runInfoNode.getProperty("PipelineName").toString());
             if (runInfoNode.hasProperty("PipelineVersion"))
