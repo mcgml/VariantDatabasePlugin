@@ -754,22 +754,13 @@ public class VariantDatabasePlugin
 
                 Parameters parameters = objectMapper.readValue(json, Parameters.class);
                 JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
+                HashSet<Long> excludedRunInfoNodeIds = new HashSet<>(Arrays.asList(parameters.excludedRunIds));
+                HashSet<Long> panelNodeIds = new HashSet<>(Arrays.asList(parameters.panelNodeIds));
+                HashSet<Long> reportedVariants = new HashSet<>();
 
                 //filters
                 int benignVariants = 0, likelyBenignVariants = 0, unclassifiedVariants = 0, likelyPathogenicVariants = 0, pathogenicVariants = 0,
-                        notHeterozygousVariants = 0, notAutosomalVariants = 0, not1KGRareVariants = 0, notExACRareVariants = 0, otherVariants = 0,
-                        classification;
-                HashSet<String> reportedVariants = new HashSet<>();
-                HashSet<Long> excludedRunInfoNodeIds = null;
-                HashSet<Long> panelNodeIds = null;
-
-                if (parameters.excludedRunIds != null){
-                    excludedRunInfoNodeIds = new HashSet<>(Arrays.asList(parameters.excludedRunIds));
-                }
-
-                if (parameters.panelNodeIds != null){
-                    panelNodeIds = new HashSet<>(Arrays.asList(parameters.panelNodeIds));
-                }
+                        notHeterozygousVariants = 0, notAutosomalVariants = 0, not1KGRareVariants = 0, notExACRareVariants = 0, otherVariants = 0, classification;
 
                 jg.writeStartObject();
 
@@ -785,26 +776,24 @@ public class VariantDatabasePlugin
                         Node variantNode = inheritanceRel.getEndNode();
 
                         //check if variant belongs to supplied panel
-                        if (panelNodeIds != null){
+                        if (panelNodeIds.size() > 0){
                             if (!variantBelongsToVirtualPanel(variantNode, panelNodeIds)){
                                 continue;
                             }
                         }
 
                         //check if variant is not present in exclusion samples
-                        if (excludedRunInfoNodeIds != null){
+                        if (excludedRunInfoNodeIds.size() > 0){
                             if (variantPresentInExclusionSamples(variantNode, excludedRunInfoNodeIds)){
                                 continue;
                             }
                         }
 
-                        String variant = variantNode.getProperty("VariantId").toString();
-
                         //remove variants already reported; caused by multiple gene association
-                        if (reportedVariants.contains(variant)) {
+                        if (reportedVariants.contains(variantNode.getId())) {
                             continue;
                         } else {
-                            reportedVariants.add(variant);
+                            reportedVariants.add(variantNode.getId());
                         }
 
                         jg.writeStartObject();
@@ -815,8 +804,6 @@ public class VariantDatabasePlugin
                         jg.writeStringField("Inheritance", getVariantInheritance(inheritanceRel.getType().name()));
                         jg.writeNumberField("Occurrence", variantOccurrence);
                         jg.writeNumberField("Frequency", getVariantInternalFrequency(panelOccurrence, variantOccurrence));
-                        jg.writeNumberField("panelOccurrence", panelOccurrence);
-                        jg.writeNumberField("variantOccurrence", variantOccurrence);
 
                         //stratify variants
                         classification = getVariantPathogenicityClassification(variantNode);
