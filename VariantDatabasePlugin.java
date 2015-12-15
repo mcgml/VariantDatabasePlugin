@@ -1291,9 +1291,9 @@ public class VariantDatabasePlugin
             if (annotationNode.hasProperty("HGVSp"))
                 jg.writeStringField("HGVSp", annotationNode.getProperty("HGVSp").toString());
             if (annotationNode.hasProperty("Exon")) {
-                jg.writeNumberField("Location", (short) annotationNode.getProperty("Exon"));
+                jg.writeStringField("Location", annotationNode.getProperty("Exon").toString());
             } else if (annotationNode.hasProperty("Intron")) {
-                jg.writeNumberField("Location", (short) annotationNode.getProperty("Intron"));
+                jg.writeStringField("Location", annotationNode.getProperty("Intron").toString());
             }
             if (annotationNode.hasProperty("Sift"))
                 jg.writeStringField("Sift", annotationNode.getProperty("Sift").toString());
