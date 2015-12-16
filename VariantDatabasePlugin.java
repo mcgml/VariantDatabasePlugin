@@ -533,7 +533,7 @@ public class VariantDatabasePlugin
     @GET
     @Path("/getnewpathogenicitiesforauthorisation")
     @Produces(MediaType.APPLICATION_JSON)
-    public Response getNewPathogenicitiesForAuthorisation(final String json) throws IOException {
+    public Response getNewPathogenicitiesForAuthorisation(final String json) {
 
         StreamingOutput stream = new StreamingOutput() {
 
