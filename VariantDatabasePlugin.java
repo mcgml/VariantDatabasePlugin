@@ -1152,6 +1152,7 @@ public class VariantDatabasePlugin
         try (Transaction tx = graphDb.beginTx()) {
 
             jg.writeNumberField("UserNodeId", userNode.getId());
+
             if (userNode.hasProperty("UserId")) jg.writeStringField("UserId", userNode.getProperty("UserId").toString());
             if (userNode.hasProperty("AccountType")) jg.writeStringField("AccountType", userNode.getProperty("AccountType").toString());
             if (userNode.hasProperty("FullName")) jg.writeStringField("FullName", userNode.getProperty("FullName").toString());
@@ -1284,7 +1285,12 @@ public class VariantDatabasePlugin
         }
     }
     private void writeFunctionalAnnotation(Node annotationNode, Relationship consequenceRel, Relationship biotypeRel, JsonGenerator jg) throws IOException {
+
+        String[] domainSources = {"Pfam_domain", "hmmpanther", "prosite", "Superfamily_domains"};
+
         try (Transaction tx = graphDb.beginTx()) {
+
+            jg.writeNumberField("AnnotationNodeId", annotationNode.getId());
 
             if (annotationNode.hasProperty("HGVSc"))
                 jg.writeStringField("HGVSc", annotationNode.getProperty("HGVSc").toString());
@@ -1303,52 +1309,20 @@ public class VariantDatabasePlugin
                 jg.writeStringField("Codons", annotationNode.getProperty("Codons").toString());
 
             //domains
-            if (annotationNode.hasProperty("Pfam_domain")) {
-                String[] domains = (String[]) annotationNode.getProperty("Pfam_domain");
+            for (String source : domainSources){
 
-                jg.writeArrayFieldStart("Pfam_domain");
+                if (annotationNode.hasProperty(source)) {
+                    String[] domains = (String[]) annotationNode.getProperty(source);
 
-                for (String domain : domains) {
-                    jg.writeString(domain);
+                    jg.writeArrayFieldStart(source);
+
+                    for (String domain : domains) {
+                        jg.writeString(domain);
+                    }
+
+                    jg.writeEndArray();
                 }
 
-                jg.writeEndArray();
-            }
-
-            if (annotationNode.hasProperty("hmmpanther")) {
-                String[] domains = (String[]) annotationNode.getProperty("hmmpanther");
-
-                jg.writeArrayFieldStart("hmmpanther");
-
-                for (String domain : domains) {
-                    jg.writeString(domain);
-                }
-
-                jg.writeEndArray();
-            }
-
-            if (annotationNode.hasProperty("prosite")) {
-                String[] domains = (String[]) annotationNode.getProperty("prosite");
-
-                jg.writeArrayFieldStart("prosite");
-
-                for (String domain : domains) {
-                    jg.writeString(domain);
-                }
-
-                jg.writeEndArray();
-            }
-
-            if (annotationNode.hasProperty("Superfamily_domains")) {
-                String[] domains = (String[]) annotationNode.getProperty("Superfamily_domains");
-
-                jg.writeArrayFieldStart("Superfamily_domains");
-
-                for (String domain : domains) {
-                    jg.writeString(domain);
-                }
-
-                jg.writeEndArray();
             }
 
             //consequence
