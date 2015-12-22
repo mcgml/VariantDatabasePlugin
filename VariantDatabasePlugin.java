@@ -665,10 +665,10 @@ public class VariantDatabasePlugin
     }
 
     @POST
-    @Path("/getvirtualpanelgenes")
+    @Path("/getvirtualpanel")
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
-    public Response getVirtualPanelGenes(final String json) throws IOException {
+    public Response getVirtualPanel(final String json) throws IOException {
 
         StreamingOutput stream = new StreamingOutput() {
 
@@ -678,22 +678,32 @@ public class VariantDatabasePlugin
                 JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
                 Parameters parameters = objectMapper.readValue(json, Parameters.class);
 
-                jg.writeStartArray();
+                jg.writeStartObject();
 
                 try (Transaction tx = graphDb.beginTx()) {
                     Node panelNode = graphDb.getNodeById(parameters.PanelNodeId);
+
+                    writeVirtualPanelInformation(panelNode, jg);
+
+                    jg.writeArrayFieldStart("Symbols");
 
                     for (Relationship containsSymbol : panelNode.getRelationships(Direction.OUTGOING, Neo4j.getHasContainsSymbol())){
                         Node symbolNode = containsSymbol.getEndNode();
 
                         if (symbolNode.hasLabel(Neo4j.getSymbolLabel())){
-                            jg.writeString(symbolNode.getProperty("SymbolId").toString());
+
+                            jg.writeStartObject();
+                            writeSymbolInformation(symbolNode, jg);
+                            jg.writeEndObject();
+
                         }
 
                     }
+
+                    jg.writeEndArray();
                 }
 
-                jg.writeEndArray();
+                jg.writeEndObject();
 
                 jg.flush();
                 jg.close();
@@ -1251,8 +1261,8 @@ public class VariantDatabasePlugin
                 jg.writeStringField("VirtualPanelName", virtualPanelNode.getProperty("VirtualPanelName").toString());
             if (designedByRelationship.hasProperty("Date"))
                 jg.writeNumberField("Date", (long) designedByRelationship.getProperty("Date"));
-            if (userNode.hasLabel(Neo4j.getUserLabel()) && userNode.hasProperty("UserId"))
-                jg.writeStringField("UserId", userNode.getProperty("UserId").toString());
+            if (userNode.hasLabel(Neo4j.getUserLabel()) && userNode.hasProperty("FullName"))
+                jg.writeStringField("FullName", userNode.getProperty("FullName").toString());
 
         }
 
@@ -1262,10 +1272,9 @@ public class VariantDatabasePlugin
 
             jg.writeNumberField("SymbolNodeId", symbolNode.getId());
 
-            if (symbolNode.hasProperty("SymbolId"))
+            if (symbolNode.hasProperty("SymbolId")) {
                 jg.writeStringField("SymbolId", symbolNode.getProperty("SymbolId").toString());
-            if (symbolNode.hasProperty("GeneId"))
-                jg.writeStringField("GeneId", symbolNode.getProperty("GeneId").toString());
+            }
 
         }
     }
