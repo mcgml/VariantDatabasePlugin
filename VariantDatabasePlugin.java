@@ -207,8 +207,6 @@ public class VariantDatabasePlugin
                 Parameters parameters = objectMapper.readValue(json, Parameters.class);
                 Node variantNode = null;
 
-                jg.writeStartObject();
-
                 try (Transaction tx = graphDb.beginTx()) {
 
                     //find variant
@@ -218,13 +216,14 @@ public class VariantDatabasePlugin
                         }
                         variants.close();
                     }
+                }
 
-                    int variantOccurrence = getGlobalVariantOccurrence(variantNode);
+                jg.writeStartObject();
 
+                if (variantNode != null){
                     writeVariantInformation(variantNode, jg);
                     writeVariantHistory(variantNode, jg);
-
-                    jg.writeNumberField("Occurrence", variantOccurrence);
+                    jg.writeNumberField("Occurrence", getGlobalVariantOccurrence(variantNode));
                 }
 
                 jg.writeEndObject();
@@ -718,19 +717,23 @@ public class VariantDatabasePlugin
 
                 JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
                 Parameters parameters = objectMapper.readValue(json, Parameters.class);
+                Node userNode = null;
 
                 try (Transaction tx = graphDb.beginTx()) {
-                    Node userNode = graphDb.getNodeById(parameters.UserNodeId);
 
-                    if (userNode.hasLabel(Neo4j.getUserLabel())){
-
-                        jg.writeStartObject();
-                        writeUserInformation(userNode, jg);
-                        jg.writeEndObject();
-
+                    //find variant
+                    try (ResourceIterator<Node> users = graphDb.findNodes(Neo4j.getUserLabel(), "UserId", parameters.UserId)) {
+                        while (users.hasNext()) {
+                            userNode = users.next();
+                        }
+                        users.close();
                     }
 
                 }
+
+                jg.writeStartObject();
+                if (userNode != null) writeUserInformation(userNode, jg);
+                jg.writeEndObject();
 
                 jg.flush();
                 jg.close();
@@ -739,6 +742,48 @@ public class VariantDatabasePlugin
         };
 
         return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+    }
+
+    @POST
+    @Path("/updateuserpassword")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response updateUserPassword(final String json) throws IOException {
+
+        Parameters parameters = objectMapper.readValue(json, Parameters.class);
+
+        try (Transaction tx = graphDb.beginTx()) {
+            Node userNode = graphDb.getNodeById(parameters.UserNodeId);
+            userNode.removeProperty("Password");
+            userNode.setProperty("Password", parameters.Password);
+            tx.success();
+        }
+
+        return Response.status(Response.Status.OK).build();
+    }
+
+    @POST
+    @Path("/createnewuser")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response createNewUser(final String json) throws IOException {
+
+        User user = objectMapper.readValue(json, User.class);
+        HashMap<String, Object> properties = new HashMap<>();
+
+        properties.put("FullName", user.FullName);
+        properties.put("Password", user.Password);
+        properties.put("JobTitle", user.JobTitle);
+        properties.put("UserId", user.UserId);
+        properties.put("ContactNumber", user.ContactNumber);
+        properties.put("Admin", user.Admin);
+
+        try (Transaction tx = graphDb.beginTx()) {
+            Neo4j.addNode(graphDb, Neo4j.getUserLabel(), properties);
+            tx.success();
+        }
+
+        return Response.status(Response.Status.OK).build();
     }
 
     @POST
@@ -1154,7 +1199,8 @@ public class VariantDatabasePlugin
             jg.writeNumberField("UserNodeId", userNode.getId());
 
             if (userNode.hasProperty("UserId")) jg.writeStringField("UserId", userNode.getProperty("UserId").toString());
-            if (userNode.hasProperty("AccountType")) jg.writeStringField("AccountType", userNode.getProperty("AccountType").toString());
+            if (userNode.hasProperty("Password")) jg.writeStringField("Password", userNode.getProperty("Password").toString());
+            if (userNode.hasProperty("Admin")) jg.writeBooleanField("Admin", (boolean) userNode.getProperty("Admin"));
             if (userNode.hasProperty("FullName")) jg.writeStringField("FullName", userNode.getProperty("FullName").toString());
             if (userNode.hasProperty("JobTitle")) jg.writeStringField("JobTitle", userNode.getProperty("JobTitle").toString());
             if (userNode.hasProperty("EmailAddress")) jg.writeStringField("EmailAddress", userNode.getProperty("EmailAddress").toString());
@@ -1451,7 +1497,7 @@ public class VariantDatabasePlugin
     private void writeVariantHistory(Node variantNode, JsonGenerator jg) throws IOException {
         jg.writeArrayFieldStart("History");
 
-        for (Relationship pathogenicityRelationship : variantNode.getRelationships(Direction.OUTGOING, Neo4j.getHasPathogenicityRelationship())) {
+        /*for (Relationship pathogenicityRelationship : variantNode.getRelationships(Direction.OUTGOING, Neo4j.getHasPathogenicityRelationship())) {
             Node pathogenicityNode = pathogenicityRelationship.getEndNode();
 
             if (pathogenicityNode.hasLabel(Neo4j.getPathogenicityLabel())) {
@@ -1512,7 +1558,7 @@ public class VariantDatabasePlugin
                 jg.writeEndObject();
             }
 
-        }
+        }*/
 
         jg.writeEndArray();
     }

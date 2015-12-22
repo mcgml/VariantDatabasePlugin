@@ -18,4 +18,6 @@ public class Parameters {
     public Long[] panelNodeIds;
     public Long PanelNodeId;
     public Boolean AddorRemove;
+    public String UserId;
+    public String Password;
 }
