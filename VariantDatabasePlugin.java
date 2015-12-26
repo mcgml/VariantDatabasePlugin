@@ -974,6 +974,208 @@ public class VariantDatabasePlugin
         return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
     }
 
+    @POST
+    @Path("/rarehomozygousworkflowv1")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    @Workflow(name = "Rare Homozygous Workflow v1", description = "A workflow to extract rare homozygous calls.")
+    @Deprecated
+    public Response rareHomozygousWorkflowv1(final String json) throws IOException {
+        StreamingOutput stream = new StreamingOutput() {
+
+            @Override
+            public void write(OutputStream os) throws IOException {
+
+                Parameters parameters = objectMapper.readValue(json, Parameters.class);
+                JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
+                HashSet<Long> reportedVariants = new HashSet<>();
+
+                jg.writeStartArray();
+
+                try (Transaction tx = graphDb.beginTx()) {
+                    Node runInfoNode = graphDb.getNodeById(parameters.RunInfoNodeId);
+
+                    for (Relationship inheritanceRel : runInfoNode.getRelationships(Neo4j.getHasHomVariantRelationship(), Direction.OUTGOING)) {
+                        Node variantNode = inheritanceRel.getEndNode();
+
+                        //remove variants already reported; caused by multiple gene association
+                        if (reportedVariants.contains(variantNode.getId())) {
+                            continue;
+                        } else {
+                            reportedVariants.add(variantNode.getId());
+                        }
+
+                        if (is1KGRareVariant(variantNode, 0.05) && isExACRareVariant(variantNode, 0.05)){
+                            //write functional annotations
+                            for (Relationship consequenceRel : variantNode.getRelationships(Direction.OUTGOING)) {
+                                Node annotationNode = consequenceRel.getEndNode();
+
+                                if (annotationNode.hasLabel(Neo4j.getAnnotationLabel())){
+
+                                    for (Relationship inFeatureRel : annotationNode.getRelationships(Direction.OUTGOING, Neo4j.getHasInFeatureRelationship())) {
+                                        Node featureNode = inFeatureRel.getEndNode();
+
+                                        if (featureNode.hasLabel(Neo4j.getFeatureLabel()) && featureNode.hasLabel(Neo4j.getCanonicalLabel())){
+
+                                            for (Relationship biotypeRel : featureNode.getRelationships(Direction.INCOMING)) {
+                                                Node symbolNode = biotypeRel.getStartNode();
+
+                                                if (symbolNode.hasLabel(Neo4j.getSymbolLabel())){
+
+                                                    jg.writeStartObject();
+
+                                                    writeVariantInformation(variantNode, jg);
+                                                    jg.writeStringField("Inheritance", getVariantInheritance(inheritanceRel.getType().name()));
+                                                    jg.writeNumberField("Occurrence", getGlobalVariantOccurrence(variantNode));
+
+                                                    writeSymbolInformation(symbolNode, jg);
+                                                    writeFeatureInformation(featureNode, jg);
+                                                    writeFunctionalAnnotation(annotationNode, consequenceRel, biotypeRel, jg);
+
+                                                    jg.writeEndObject();
+
+                                                }
+
+                                            }
+
+                                        }
+
+                                    }
+
+                                }
+
+                            }
+                        }
+
+                    }
+
+                }
+
+                jg.writeEndArray();
+
+                jg.flush();
+                jg.close();
+
+            }
+
+        };
+
+        return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+    }
+
+    @POST
+    @Path("/rarecompoundhetworkflowv1")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    @Workflow(name = "Rare Compound Heterozygous Workflow v1", description = "A workflow to extract rare compound het calls.")
+    @Deprecated
+    public Response rareCompoundHetWorkflowv1(final String json) throws IOException {
+        StreamingOutput stream = new StreamingOutput() {
+
+            @Override
+            public void write(OutputStream os) throws IOException {
+
+                Parameters parameters = objectMapper.readValue(json, Parameters.class);
+                JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
+                HashMap<String, HashSet<Node>> callsByGene = new HashMap<>();
+                HashSet<Node> uniqueCompoundHetCalls = new HashSet<>();
+
+                jg.writeStartArray();
+
+                try (Transaction tx = graphDb.beginTx()) {
+                    Node runInfoNode = graphDb.getNodeById(parameters.RunInfoNodeId);
+
+                    //get all rare het calls
+                    for (Relationship inheritanceRel : runInfoNode.getRelationships(Neo4j.getHasHetVariantRelationship(), Direction.OUTGOING)) {
+                        Node variantNode = inheritanceRel.getEndNode();
+
+                        if (is1KGRareVariant(variantNode, 0.05) && isExACRareVariant(variantNode, 0.05)){
+
+                            for (Relationship inSymbolRelationship : variantNode.getRelationships(Direction.OUTGOING, Neo4j.getHasInSymbolRelationship())){
+
+                                Node symbolNode = inSymbolRelationship.getEndNode();
+                                String symbolId = symbolNode.getProperty("SymbolId").toString();
+
+                                if (!callsByGene.containsKey(symbolId)){
+                                    callsByGene.put(symbolId, new HashSet<Node>());
+                                }
+
+                                callsByGene.get(symbolId).add(variantNode);
+                            }
+
+                        }
+
+                    }
+
+                    //exclude calls from genes with less than 1 call
+                    for (Map.Entry<String, HashSet<Node>> iter : callsByGene.entrySet()){
+
+                        if (iter.getValue().size() > 1){
+                            for (Node variantNode : iter.getValue()){
+                                uniqueCompoundHetCalls.add(variantNode);
+                            }
+                        }
+                    }
+
+                    //make coumpound het calls unique && get print
+                    for (Node variantNode : uniqueCompoundHetCalls){
+
+                        //write functional annotations
+                        for (Relationship consequenceRel : variantNode.getRelationships(Direction.OUTGOING)) {
+                            Node annotationNode = consequenceRel.getEndNode();
+
+                            if (annotationNode.hasLabel(Neo4j.getAnnotationLabel())){
+
+                                for (Relationship inFeatureRel : annotationNode.getRelationships(Direction.OUTGOING, Neo4j.getHasInFeatureRelationship())) {
+                                    Node featureNode = inFeatureRel.getEndNode();
+
+                                    if (featureNode.hasLabel(Neo4j.getFeatureLabel()) && featureNode.hasLabel(Neo4j.getCanonicalLabel())){
+
+                                        for (Relationship biotypeRel : featureNode.getRelationships(Direction.INCOMING)) {
+                                            Node symbolNode = biotypeRel.getStartNode();
+
+                                            if (symbolNode.hasLabel(Neo4j.getSymbolLabel())){
+
+                                                jg.writeStartObject();
+
+                                                writeVariantInformation(variantNode, jg);
+                                                jg.writeStringField("Inheritance", "HET");
+                                                jg.writeNumberField("Occurrence", getGlobalVariantOccurrence(variantNode));
+
+                                                writeSymbolInformation(symbolNode, jg);
+                                                writeFeatureInformation(featureNode, jg);
+                                                writeFunctionalAnnotation(annotationNode, consequenceRel, biotypeRel, jg);
+
+                                                jg.writeEndObject();
+
+                                            }
+
+                                        }
+
+                                    }
+
+                                }
+
+                            }
+
+                        }
+
+                    }
+
+                }
+
+                jg.writeEndArray();
+
+                jg.flush();
+                jg.close();
+
+            }
+
+        };
+
+        return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+    }
+
     //helper functions
     private int getGlobalVariantOccurrence(Node variantNode){
 
