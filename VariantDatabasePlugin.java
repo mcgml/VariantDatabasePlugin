@@ -40,6 +40,13 @@ public class VariantDatabasePlugin
         this.methods = this.getClass().getMethods();
     }
 
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.METHOD)
+    public @interface Workflow {
+        String name();
+        String description();
+    }
+
     @POST
     @Path("/returninputjson")
     @Consumes(MediaType.APPLICATION_JSON)
@@ -47,13 +54,6 @@ public class VariantDatabasePlugin
     public Response returnInputJson(final String json) throws IOException {
         return Response.status( Response.Status.OK ).entity(
                 (json).getBytes( Charset.forName("UTF-8") ) ).build();
-    }
-
-    @Retention(RetentionPolicy.RUNTIME)
-    @Target(ElementType.METHOD)
-    public @interface Workflow {
-        String name();
-        String description();
     }
 
     @GET
@@ -80,9 +80,6 @@ public class VariantDatabasePlugin
 
                         jg.writeFieldName("Description");
                         jg.writeString(method.getAnnotation(Workflow.class).description());
-
-                        jg.writeFieldName("Path");
-                        jg.writeString(method.getAnnotation(Path.class).value());
 
                         jg.writeEndObject();
 
@@ -401,220 +398,6 @@ public class VariantDatabasePlugin
     }
 
     @POST
-    @Path("/addvariantpathogenicity")
-    @Consumes(MediaType.APPLICATION_JSON)
-    @Produces(MediaType.APPLICATION_JSON)
-    public Response addVariantPathogenicity(final String json) throws IOException {
-        Parameters parameters = objectMapper.readValue(json, Parameters.class);
-
-        try (Transaction tx = graphDb.beginTx()) {
-
-            Node variantNode = graphDb.getNodeById(parameters.VariantNodeId);
-            Node userNode = graphDb.getNodeById(parameters.UserNodeId);
-
-            if (variantNode.hasLabel(Neo4j.getVariantLabel()) && userNode.hasLabel(Neo4j.getUserLabel())){
-
-                if (isClassificationPendingApproval(variantNode)){
-                    throw new UnsupportedOperationException("Variant has pending classification.");
-                }
-
-                Date date = new Date();
-
-                //create pathogenicity
-                Node pathogenicityNode = graphDb.createNode(Neo4j.getPathogenicityLabel());
-                variantNode.createRelationshipTo(pathogenicityNode, Neo4j.getHasPathogenicityRelationship());
-
-                Relationship addedByRelationship = pathogenicityNode.createRelationshipTo(userNode, Neo4j.getAddedByRelationship());
-
-                //add properties
-                addedByRelationship.setProperty("Classification", parameters.Classification);
-                addedByRelationship.setProperty("Date", date.getTime());
-                if (parameters.Evidence != null) addedByRelationship.setProperty("Evidence", parameters.Evidence);
-
-            }
-
-            tx.success();
-        } catch (UnsupportedOperationException e){
-            return Response
-                    .status(Response.Status.BAD_REQUEST)
-                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
-                    .build();
-        }
-
-        return Response
-                .status(Response.Status.OK)
-                .build();
-    }
-
-    @POST
-    @Path("/removevariantpathogenicity")
-    @Consumes(MediaType.APPLICATION_JSON)
-    @Produces(MediaType.APPLICATION_JSON)
-    public Response removeVariantPathogenicity(final String json) throws IOException {
-
-        StreamingOutput stream = new StreamingOutput() {
-
-            @Override
-            public void write(OutputStream os) throws IOException, WebApplicationException {
-
-                Parameters parameters = objectMapper.readValue(json, Parameters.class);
-
-                try (Transaction tx = graphDb.beginTx()) {
-
-                    Node pathogenicityNode = graphDb.getNodeById(parameters.PathogenicityNodeId);
-                    Node userNode = graphDb.getNodeById(parameters.UserNodeId);
-
-                    if (pathogenicityNode.hasLabel(Neo4j.getPathogenicityLabel()) && userNode.hasLabel(Neo4j.getUserLabel())){
-
-                        Date date = new Date();
-
-                        //remove pathogenicity
-                        Relationship removedByRelationship = pathogenicityNode.createRelationshipTo(userNode, Neo4j.getRemovedByRelationship());
-
-                        //add properties
-                        removedByRelationship.setProperty("Date", date.getTime());
-                        if (parameters.Evidence != null) removedByRelationship.setProperty("Evidence", parameters.Evidence);
-
-                    }
-
-                    tx.success();
-                }
-
-            }
-
-        };
-
-        return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
-    }
-
-    @POST
-    @Path("/authorisevariantpathogenicity")
-    @Consumes(MediaType.APPLICATION_JSON)
-    @Produces(MediaType.APPLICATION_JSON)
-    public Response authoriseVariantPathogenicity(final String json) throws IOException {
-
-        StreamingOutput stream = new StreamingOutput() {
-
-            @Override
-            public void write(OutputStream os) throws IOException, WebApplicationException {
-
-                Parameters parameters = objectMapper.readValue(json, Parameters.class);
-
-                try (Transaction tx = graphDb.beginTx()) {
-
-                    Node pathogenicityNode = graphDb.getNodeById(parameters.PathogenicityNodeId);
-                    Node userNode = graphDb.getNodeById(parameters.UserNodeId);
-
-                    if (pathogenicityNode.hasLabel(Neo4j.getPathogenicityLabel()) && userNode.hasLabel(Neo4j.getUserLabel())){
-
-                        Date date = new Date();
-
-                        if (parameters.AddorRemove){
-                            Relationship relationship = pathogenicityNode.createRelationshipTo(userNode, Neo4j.getAddAuthorisedByRelationship());
-                            relationship.setProperty("Date", date.getTime());
-                        } else {
-                            Relationship relationship = pathogenicityNode.createRelationshipTo(userNode, Neo4j.getRemoveAuthorisedByRelationship());
-                            relationship.setProperty("Date", date.getTime());
-                        }
-
-                    }
-
-                    tx.success();
-                }
-
-            }
-
-        };
-
-        return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
-    }
-
-    @GET
-    @Path("/getnewpathogenicitiesforauthorisation")
-    @Produces(MediaType.APPLICATION_JSON)
-    public Response getNewPathogenicitiesForAuthorisation(final String json) {
-
-        StreamingOutput stream = new StreamingOutput() {
-
-            @Override
-            public void write(OutputStream os) throws IOException, WebApplicationException {
-
-                JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
-
-                jg.writeStartArray();
-
-                try (Transaction tx = graphDb.beginTx()) {
-                    try (ResourceIterator<Node> pathogenicityNodeIterator = graphDb.findNodes(Neo4j.getPathogenicityLabel())) {
-
-                        while (pathogenicityNodeIterator.hasNext()) {
-                            Node pathogenicityNode = pathogenicityNodeIterator.next();
-
-                            Relationship addedByRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getAddedByRelationship(), Direction.OUTGOING);
-                            Relationship removedByRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getRemovedByRelationship(), Direction.OUTGOING);
-                            Relationship addAuthorisedByRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getAddAuthorisedByRelationship(), Direction.OUTGOING);
-                            Relationship removeAuthorisedByRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getRemoveAuthorisedByRelationship(), Direction.OUTGOING);
-                            Relationship hasPathogenicityRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getHasPathogenicityRelationship(), Direction.INCOMING);
-
-                            if (addedByRelationship != null && removedByRelationship == null && addAuthorisedByRelationship == null && removeAuthorisedByRelationship == null){
-                                Node userNode = addedByRelationship.getEndNode();
-                                Node variantNode = hasPathogenicityRelationship.getStartNode();
-
-                                if (userNode.hasLabel(Neo4j.getUserLabel()) && variantNode.hasLabel(Neo4j.getVariantLabel())){
-
-                                    jg.writeStartObject();
-
-                                    if (variantNode.hasProperty("VariantId")) jg.writeStringField("VariantId", variantNode.getProperty("VariantId").toString());
-                                    jg.writeNumberField("PathogenicityNodeId", pathogenicityNode.getId());
-                                    if (addedByRelationship.hasProperty("Classification")) jg.writeNumberField("Classification", (int) addedByRelationship.getProperty("Classification"));
-                                    jg.writeBooleanField("AddAction", true);
-                                    if (userNode.hasProperty("UserId")) jg.writeStringField("UserId", userNode.getProperty("UserId").toString());
-                                    if (addedByRelationship.hasProperty("Date")) jg.writeNumberField("Date", (long) addedByRelationship.getProperty("Date"));
-                                    if (addedByRelationship.hasProperty("Evidence")) jg.writeStringField("Evidence", addedByRelationship.getProperty("Evidence").toString());
-
-                                    jg.writeEndObject();
-
-                                }
-
-                            } else if (addedByRelationship != null && removedByRelationship != null && removeAuthorisedByRelationship == null){
-                                Node userNode = removedByRelationship.getEndNode();
-                                Node variantNode = hasPathogenicityRelationship.getStartNode();
-
-                                if (userNode.hasLabel(Neo4j.getUserLabel()) && variantNode.hasLabel(Neo4j.getVariantLabel())){
-
-                                    jg.writeStartObject();
-
-                                    if (variantNode.hasProperty("VariantId")) jg.writeStringField("VariantId", variantNode.getProperty("VariantId").toString());
-                                    jg.writeNumberField("PathogenicityNodeId", pathogenicityNode.getId());
-                                    if (addedByRelationship.hasProperty("Classification")) jg.writeNumberField("Classification", (int) addedByRelationship.getProperty("Classification"));
-                                    jg.writeBooleanField("AddAction", false);
-                                    if (userNode.hasProperty("UserId")) jg.writeStringField("UserId", userNode.getProperty("UserId").toString());
-                                    if (removedByRelationship.hasProperty("Date")) jg.writeNumberField("Date", (long) removedByRelationship.getProperty("Date"));
-                                    if (removedByRelationship.hasProperty("Evidence")) jg.writeStringField("Evidence", removedByRelationship.getProperty("Evidence").toString());
-
-                                    jg.writeEndObject();
-
-                                }
-
-                            }
-
-                        }
-
-                    }
-                }
-
-                jg.writeEndArray();
-
-                jg.flush();
-                jg.close();
-
-            }
-
-        };
-
-        return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
-    }
-
-    @POST
     @Path("/addvirtualpanel")
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
@@ -797,11 +580,10 @@ public class VariantDatabasePlugin
     }
 
     @POST
-    @Path("/autosomaldominantworkflowv1")
+    @Path("/getfilteredvariants")
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
-    @Workflow(name = "Autosomal Dominant v1", description = "A workflow to stratify homozygous, sex-linked, and frequent variants (>0.01 MAF).")
-    public Response autosomalDominantWorkflowv1(final String json) throws IOException {
+    public Response getFilteredVariants(final String json) throws IOException {
         StreamingOutput stream = new StreamingOutput() {
 
             @Override
@@ -809,371 +591,424 @@ public class VariantDatabasePlugin
 
                 Parameters parameters = objectMapper.readValue(json, Parameters.class);
                 JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
-                HashSet<Long> excludedRunInfoNodeIds = new HashSet<>(Arrays.asList(parameters.excludedRunIds));
-                HashSet<Long> panelNodeIds = new HashSet<>(Arrays.asList(parameters.panelNodeIds));
-                HashSet<Long> reportedVariants = new HashSet<>();
 
-                //filters
-                int benignVariants = 0, likelyBenignVariants = 0, unclassifiedVariants = 0, likelyPathogenicVariants = 0, pathogenicVariants = 0,
-                        notHeterozygousVariants = 0, notAutosomalVariants = 0, not1KGRareVariants = 0, notExACRareVariants = 0, otherVariants = 0, classification;
+                HashSet<Long> excludeRunInfoNodes = new HashSet<>(Arrays.asList(parameters.excludeRunInfoNodes));
+                HashSet<Long> includePanelNodes = new HashSet<>(Arrays.asList(parameters.includePanelNodes));
+                Node runInfoNode;
+
+                try (Transaction tx = graphDb.beginTx()) {
+                    runInfoNode = graphDb.getNodeById(parameters.RunInfoNodeId);
+                }
+
+                //exec workflow
+                switch (parameters.workflowName) {
+                    case "Autosomal Dominant Workflow v1":  runAutosomalDominantWorkflowv1(jg, excludeRunInfoNodes, includePanelNodes, runInfoNode);
+                        break;
+                    case "Rare Homozygous Workflow v1":  runRareHomozygousWorkflowv1(jg, excludeRunInfoNodes, includePanelNodes, runInfoNode);
+                        break;
+                    case "Autosomal Recessive Workflow v1":  runAutosomalRecessiveWorkflowv1(jg, excludeRunInfoNodes, includePanelNodes, runInfoNode);
+                        break;
+                    default: throw new IllegalArgumentException("Unknown workflow");
+                }
+
+                jg.flush();
+                jg.close();
+
+            }
+
+        };
+
+        return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+    }
+
+    @Workflow(name = "Autosomal Dominant Workflow v1", description = "A workflow to extract rare autosomal heterozygous calls")
+    public void runAutosomalDominantWorkflowv1(JsonGenerator jg, HashSet<Long> excludeRunInfoNodes, HashSet<Long> includePanelNodes, Node runInfoNode) throws IOException {
+
+        boolean includeCallsFromPanel = false, excludeCallsFromSample = false;
+        int notHeterozygousVariants = 0, notAutosomalVariants = 0, not1KGRareVariants = 0, notExACRareVariants = 0, passVariants = 0, total = 0;
+
+        if (includePanelNodes.size() > 0) includeCallsFromPanel = true;
+        if (excludeRunInfoNodes.size() > 0) excludeCallsFromSample = true;
+
+        jg.writeStartObject();
+
+        jg.writeFieldName("Variants");
+        jg.writeStartArray();
+
+        try (Transaction tx = graphDb.beginTx()) {
+
+            for (Relationship inheritanceRel : runInfoNode.getRelationships(Direction.OUTGOING)) {
+                Node variantNode = inheritanceRel.getEndNode();
+
+                //check if variant belongs to supplied panel
+                if (includeCallsFromPanel && !variantBelongsToVirtualPanel(variantNode, includePanelNodes)){
+                    continue;
+                }
+
+                //check if variant is not present in exclusion samples
+                if (excludeCallsFromSample && variantPresentInExclusionSamples(variantNode, excludeRunInfoNodes)){
+                    continue;
+                }
 
                 jg.writeStartObject();
 
-                jg.writeFieldName("Variants");
-                jg.writeStartArray();
+                writeVariantInformation(variantNode, jg);
+                jg.writeStringField("Inheritance", getVariantInheritance(inheritanceRel.getType().name()));
 
-                try (Transaction tx = graphDb.beginTx()) {
+                //stratify variants
+                if (inheritanceRel.isType(Neo4j.getHasHomVariantRelationship())) {
+                    jg.writeNumberField("Filter", 0);
+                    notHeterozygousVariants++;
+                } else if (!variantNode.hasLabel(Neo4j.getAutoChromosomeLabel())) {
+                    jg.writeNumberField("Filter", 1);
+                    notAutosomalVariants++;
+                } else if (!isExACRareVariant(variantNode, 0.01)) {
+                    jg.writeNumberField("Filter", 2);
+                    notExACRareVariants++;
+                } else if (!is1KGRareVariant(variantNode, 0.01)) {
+                    jg.writeNumberField("Filter", 3);
+                    not1KGRareVariants++;
+                } else {
+                    jg.writeNumberField("Filter", 4);
+                    passVariants++;
+                }
 
-                    Node runInfoNode = graphDb.getNodeById(parameters.RunInfoNodeId);
-                    int panelOccurrence = getPanelOccurrence(runInfoNode.getProperty("Assay").toString());
+                total++;
 
-                    for (Relationship inheritanceRel : runInfoNode.getRelationships(Direction.OUTGOING)) {
-                        Node variantNode = inheritanceRel.getEndNode();
+                jg.writeEndObject();
 
-                        //check if variant belongs to supplied panel
-                        if (panelNodeIds.size() > 0){
-                            if (!variantBelongsToVirtualPanel(variantNode, panelNodeIds)){
-                                continue;
-                            }
+            }
+
+        }
+
+        jg.writeEndArray();
+
+        //write filters
+        jg.writeFieldName("Filters");
+        jg.writeStartArray();
+
+        jg.writeStartObject();
+        jg.writeStringField("key", "Homozygous");
+        jg.writeNumberField("y", notHeterozygousVariants);
+        jg.writeEndObject();
+
+        jg.writeStartObject();
+        jg.writeStringField("key", "Non Autosomal");
+        jg.writeNumberField("y", notAutosomalVariants);
+        jg.writeEndObject();
+
+        jg.writeStartObject();
+        jg.writeStringField("key", "ExAC >1% Frequency");
+        jg.writeNumberField("y", notExACRareVariants);
+        jg.writeEndObject();
+
+        jg.writeStartObject();
+        jg.writeStringField("key", "1KG >1% Frequency");
+        jg.writeNumberField("y", not1KGRareVariants);
+        jg.writeEndObject();
+
+        jg.writeStartObject();
+        jg.writeStringField("key", "Pass");
+        jg.writeNumberField("y", passVariants);
+        jg.writeEndObject();
+
+        jg.writeEndArray();
+
+        jg.writeNumberField("Total", total);
+
+        jg.writeEndObject();
+
+    }
+
+    @Workflow(name = "Rare Homozygous Workflow v1", description = "A workflow to extract rare homozygous calls")
+    public void runRareHomozygousWorkflowv1(JsonGenerator jg, HashSet<Long> excludeRunInfoNodes, HashSet<Long> includePanelNodes, Node runInfoNode) throws IOException {
+
+        boolean includeCallsFromPanel = false, excludeCallsFromSample = false;
+        int notHomozygousVariants = 0, not1KGRareVariants = 0, notExACRareVariants = 0, passVariants = 0, total = 0;
+
+        if (includePanelNodes.size() > 0) includeCallsFromPanel = true;
+        if (excludeRunInfoNodes.size() > 0) excludeCallsFromSample = true;
+
+        jg.writeStartObject();
+
+        jg.writeFieldName("Variants");
+        jg.writeStartArray();
+
+        try (Transaction tx = graphDb.beginTx()) {
+
+            for (Relationship inheritanceRel : runInfoNode.getRelationships(Direction.OUTGOING)) {
+                Node variantNode = inheritanceRel.getEndNode();
+
+                //check if variant belongs to supplied panel
+                if (includeCallsFromPanel && !variantBelongsToVirtualPanel(variantNode, includePanelNodes)){
+                    continue;
+                }
+
+                //check if variant is not present in exclusion samples
+                if (excludeCallsFromSample && variantPresentInExclusionSamples(variantNode, excludeRunInfoNodes)){
+                    continue;
+                }
+
+                jg.writeStartObject();
+
+                writeVariantInformation(variantNode, jg);
+                jg.writeStringField("Inheritance", getVariantInheritance(inheritanceRel.getType().name()));
+
+                //stratify variants
+                if (inheritanceRel.isType(Neo4j.getHasHetVariantRelationship())) {
+                    jg.writeNumberField("Filter", 0);
+                    notHomozygousVariants++;
+                } else if (!isExACRareVariant(variantNode, 0.05)) {
+                    jg.writeNumberField("Filter", 1);
+                    notExACRareVariants++;
+                } else if (!is1KGRareVariant(variantNode, 0.05)) {
+                    jg.writeNumberField("Filter", 2);
+                    not1KGRareVariants++;
+                } else {
+                    jg.writeNumberField("Filter", 3);
+                    passVariants++;
+                }
+
+                total++;
+
+                jg.writeEndObject();
+
+            }
+
+        }
+
+        jg.writeEndArray();
+
+        //write filters
+        jg.writeFieldName("Filters");
+        jg.writeStartArray();
+
+        jg.writeStartObject();
+        jg.writeStringField("key", "Heterozygous");
+        jg.writeNumberField("y", notHomozygousVariants);
+        jg.writeEndObject();
+
+        jg.writeStartObject();
+        jg.writeStringField("key", "ExAC >5% Frequency");
+        jg.writeNumberField("y", notExACRareVariants);
+        jg.writeEndObject();
+
+        jg.writeStartObject();
+        jg.writeStringField("key", "1KG >5% Frequency");
+        jg.writeNumberField("y", not1KGRareVariants);
+        jg.writeEndObject();
+
+        jg.writeStartObject();
+        jg.writeStringField("key", "Pass");
+        jg.writeNumberField("y", passVariants);
+        jg.writeEndObject();
+
+        jg.writeEndArray();
+
+        jg.writeNumberField("Total", total);
+
+        jg.writeEndObject();
+
+    }
+
+    @Workflow(name = "Autosomal Recessive Workflow v1", description = "A workflow to extract rare autosomal compound calls")
+    public void runAutosomalRecessiveWorkflowv1(JsonGenerator jg, HashSet<Long> excludeRunInfoNodes, HashSet<Long> includePanelNodes, Node runInfoNode) throws IOException {
+
+        boolean includeCallsFromPanel = false, excludeCallsFromSample = false, hasAssociatedSymbol;
+        int notAutosomalVariants = 0, not1KGRareVariants = 0, notExACRareVariants = 0, noAnnotation = 0, singleGeneChange = 0, passVariants = 0, total = 0;
+        HashMap<String, HashSet<Node>> callsByGene = new HashMap<>();
+        HashSet<Long> uniqueIds = new HashSet<>();
+
+        if (includePanelNodes.size() > 0) includeCallsFromPanel = true;
+        if (excludeRunInfoNodes.size() > 0) excludeCallsFromSample = true;
+
+        jg.writeStartObject();
+
+        jg.writeFieldName("Variants");
+        jg.writeStartArray();
+
+        try (Transaction tx = graphDb.beginTx()) {
+
+            for (Relationship inheritanceRel : runInfoNode.getRelationships(Direction.OUTGOING)) {
+                Node variantNode = inheritanceRel.getEndNode();
+
+                //check if variant belongs to supplied panel
+                if (includeCallsFromPanel && !variantBelongsToVirtualPanel(variantNode, includePanelNodes)){
+                    continue;
+                }
+
+                //check if variant is not present in exclusion samples
+                if (excludeCallsFromSample && variantPresentInExclusionSamples(variantNode, excludeRunInfoNodes)){
+                    continue;
+                }
+
+                //stratify variants
+                if (!variantNode.hasLabel(Neo4j.getAutoChromosomeLabel())) {
+                    jg.writeStartObject();
+
+                    writeVariantInformation(variantNode, jg);
+                    jg.writeStringField("Inheritance", getVariantInheritance(inheritanceRel.getType().name()));
+                    jg.writeNumberField("Filter", 0);
+
+                    notAutosomalVariants++;
+                    total++;
+
+                    jg.writeEndObject();
+                } else if (!isExACRareVariant(variantNode, 0.05)) {
+                    jg.writeStartObject();
+
+                    writeVariantInformation(variantNode, jg);
+                    jg.writeStringField("Inheritance", getVariantInheritance(inheritanceRel.getType().name()));
+                    jg.writeNumberField("Filter", 1);
+
+                    notExACRareVariants++;
+                    total++;
+
+                    jg.writeEndObject();
+                } else if (!is1KGRareVariant(variantNode, 0.05)) {
+                    jg.writeStartObject();
+
+                    writeVariantInformation(variantNode, jg);
+                    jg.writeStringField("Inheritance", getVariantInheritance(inheritanceRel.getType().name()));
+                    jg.writeNumberField("Filter", 2);
+
+                    not1KGRareVariants++;
+                    total++;
+
+                    jg.writeEndObject();
+                } else {
+                    hasAssociatedSymbol = false;
+                    for (Relationship inSymbolRelationship : variantNode.getRelationships(Direction.OUTGOING, Neo4j.getHasInSymbolRelationship())){
+
+                        hasAssociatedSymbol = true;
+                        Node symbolNode = inSymbolRelationship.getEndNode();
+                        String symbolId = symbolNode.getProperty("SymbolId").toString();
+
+                        if (!callsByGene.containsKey(symbolId)){
+                            callsByGene.put(symbolId, new HashSet<Node>());
                         }
 
-                        //check if variant is not present in exclusion samples
-                        if (excludedRunInfoNodeIds.size() > 0){
-                            if (variantPresentInExclusionSamples(variantNode, excludedRunInfoNodeIds)){
-                                continue;
-                            }
-                        }
+                        callsByGene.get(symbolId).add(variantNode);
+                    }
 
-                        //remove variants already reported; caused by multiple gene association
-                        if (reportedVariants.contains(variantNode.getId())) {
-                            continue;
-                        } else {
-                            reportedVariants.add(variantNode.getId());
-                        }
-
+                    //catch calls without symbol
+                    if (!hasAssociatedSymbol){
                         jg.writeStartObject();
-
-                        int variantOccurrence = getGlobalVariantOccurrence(variantNode);
 
                         writeVariantInformation(variantNode, jg);
                         jg.writeStringField("Inheritance", getVariantInheritance(inheritanceRel.getType().name()));
-                        jg.writeNumberField("Occurrence", variantOccurrence);
-                        jg.writeNumberField("Frequency", getVariantInternalFrequency(panelOccurrence, variantOccurrence));
+                        jg.writeNumberField("Filter", 3);
 
-                        //stratify variants
-                        classification = getVariantPathogenicityClassification(variantNode);
-                        if (classification != -1) { //has classification
+                        noAnnotation++;
+                        total++;
 
-                            if (classification == 1) {
-                                jg.writeNumberField("Filter", 0);
-                                benignVariants++;
-                            } else if (classification == 2) {
-                                jg.writeNumberField("Filter", 1);
-                                likelyBenignVariants++;
-                            } else if (classification == 3) {
-                                jg.writeNumberField("Filter", 2);
-                                unclassifiedVariants++;
-                            } else if (classification == 4) {
-                                jg.writeNumberField("Filter", 3);
-                                likelyPathogenicVariants++;
-                            } else if (classification == 5) {
-                                jg.writeNumberField("Filter", 4);
-                                pathogenicVariants++;
+                        jg.writeEndObject();
+                    }
+                }
+
+            } //done looping over variants
+
+            //collect remaining calls in genes with multiple calls
+            for (Map.Entry<String, HashSet<Node>> iter : callsByGene.entrySet()){
+
+                if (iter.getValue().size() == 1){
+                    for (Node variantNode : iter.getValue()){
+
+                        if (uniqueIds.contains(variantNode.getId())) continue;
+                        uniqueIds.add(variantNode.getId());
+
+                        jg.writeStartObject();
+
+                        writeVariantInformation(variantNode, jg);
+
+                        //find inheritance
+                        for (Relationship inheritanceRel : variantNode.getRelationships(Direction.INCOMING)){
+                            if (inheritanceRel.getStartNode().equals(runInfoNode)){
+                                jg.writeStringField("Inheritance", getVariantInheritance(inheritanceRel.getType().name()));
                             }
-
-                        } else if (inheritanceRel.isType(Neo4j.getHasHomVariantRelationship())) {
-                            jg.writeNumberField("Filter", 5);
-                            notHeterozygousVariants++;
-                        } else if (!variantNode.hasLabel(Neo4j.getAutoChromosomeLabel())) {
-                            jg.writeNumberField("Filter", 6);
-                            notAutosomalVariants++;
-                        } else if (!isExACRareVariant(variantNode, 0.01)) {
-                            jg.writeNumberField("Filter", 7);
-                            notExACRareVariants++;
-                        } else if (!is1KGRareVariant(variantNode, 0.01)) {
-                            jg.writeNumberField("Filter", 8);
-                            not1KGRareVariants++;
-                        } else {
-                            jg.writeNumberField("Filter", 9);
-                            otherVariants++;
                         }
+
+                        jg.writeNumberField("Filter", 4);
+
+                        singleGeneChange++;
+                        total++;
 
                         jg.writeEndObject();
 
                     }
+                } else {
+                    for (Node variantNode : iter.getValue()){
 
+                        if (uniqueIds.contains(variantNode.getId())) continue;
+                        uniqueIds.add(variantNode.getId());
+
+                        jg.writeStartObject();
+
+                        writeVariantInformation(variantNode, jg);
+
+                        //find inheritance
+                        for (Relationship inheritanceRel : variantNode.getRelationships(Direction.INCOMING)){
+                            if (inheritanceRel.getStartNode().equals(runInfoNode)){
+                                jg.writeStringField("Inheritance", getVariantInheritance(inheritanceRel.getType().name()));
+                            }
+                        }
+
+                        jg.writeNumberField("Filter", 5);
+
+                        passVariants++;
+                        total++;
+
+                        jg.writeEndObject();
+
+                    }
                 }
-
-                jg.writeEndArray();
-
-                //write filters
-                jg.writeFieldName("Filters");
-                jg.writeStartArray();
-
-                jg.writeStartObject();
-                jg.writeStringField("key", "Benign");
-                jg.writeNumberField("y", benignVariants);
-                jg.writeEndObject();
-
-                jg.writeStartObject();
-                jg.writeStringField("key", "Likely Benign");
-                jg.writeNumberField("y", likelyBenignVariants);
-                jg.writeEndObject();
-
-                jg.writeStartObject();
-                jg.writeStringField("key", "Unclassified");
-                jg.writeNumberField("y", unclassifiedVariants);
-                jg.writeEndObject();
-
-                jg.writeStartObject();
-                jg.writeStringField("key", "Likely Pathogenic");
-                jg.writeNumberField("y", likelyPathogenicVariants);
-                jg.writeEndObject();
-
-                jg.writeStartObject();
-                jg.writeStringField("key", "Pathogenic");
-                jg.writeNumberField("y", pathogenicVariants);
-                jg.writeEndObject();
-
-                jg.writeStartObject();
-                jg.writeStringField("key", "Homozygous");
-                jg.writeNumberField("y", notHeterozygousVariants);
-                jg.writeEndObject();
-
-                jg.writeStartObject();
-                jg.writeStringField("key", "Non Autosomal");
-                jg.writeNumberField("y", notAutosomalVariants);
-                jg.writeEndObject();
-
-                jg.writeStartObject();
-                jg.writeStringField("key", "ExAC >1% Frequency");
-                jg.writeNumberField("y", notExACRareVariants);
-                jg.writeEndObject();
-
-                jg.writeStartObject();
-                jg.writeStringField("key", "1KG >1% Frequency");
-                jg.writeNumberField("y", not1KGRareVariants);
-                jg.writeEndObject();
-
-                jg.writeStartObject();
-                jg.writeStringField("key", "Pass");
-                jg.writeNumberField("y", otherVariants);
-                jg.writeEndObject();
-
-                jg.writeEndArray();
-
-                jg.writeEndObject();
-
-                jg.flush();
-                jg.close();
 
             }
 
-        };
+        }
 
-        return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
-    }
+        jg.writeEndArray();
 
-    @POST
-    @Path("/rarehomozygousworkflowv1")
-    @Consumes(MediaType.APPLICATION_JSON)
-    @Produces(MediaType.APPLICATION_JSON)
-    @Workflow(name = "Rare Homozygous Workflow v1", description = "A workflow to extract rare homozygous calls.")
-    @Deprecated
-    public Response rareHomozygousWorkflowv1(final String json) throws IOException {
-        StreamingOutput stream = new StreamingOutput() {
+        //write filters
+        jg.writeFieldName("Filters");
+        jg.writeStartArray();
 
-            @Override
-            public void write(OutputStream os) throws IOException {
+        jg.writeStartObject();
+        jg.writeStringField("key", "Non Autosomal");
+        jg.writeNumberField("y", notAutosomalVariants);
+        jg.writeEndObject();
 
-                Parameters parameters = objectMapper.readValue(json, Parameters.class);
-                JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
-                HashSet<Long> reportedVariants = new HashSet<>();
+        jg.writeStartObject();
+        jg.writeStringField("key", "ExAC >5% Frequency");
+        jg.writeNumberField("y", notExACRareVariants);
+        jg.writeEndObject();
 
-                jg.writeStartArray();
+        jg.writeStartObject();
+        jg.writeStringField("key", "1KG >5% Frequency");
+        jg.writeNumberField("y", not1KGRareVariants);
+        jg.writeEndObject();
 
-                try (Transaction tx = graphDb.beginTx()) {
-                    Node runInfoNode = graphDb.getNodeById(parameters.RunInfoNodeId);
+        jg.writeStartObject();
+        jg.writeStringField("key", "No Annotation");
+        jg.writeNumberField("y", noAnnotation);
+        jg.writeEndObject();
 
-                    for (Relationship inheritanceRel : runInfoNode.getRelationships(Neo4j.getHasHomVariantRelationship(), Direction.OUTGOING)) {
-                        Node variantNode = inheritanceRel.getEndNode();
+        jg.writeStartObject();
+        jg.writeStringField("key", "Single Gene Change");
+        jg.writeNumberField("y", singleGeneChange);
+        jg.writeEndObject();
 
-                        //remove variants already reported; caused by multiple gene association
-                        if (reportedVariants.contains(variantNode.getId())) {
-                            continue;
-                        } else {
-                            reportedVariants.add(variantNode.getId());
-                        }
+        jg.writeStartObject();
+        jg.writeStringField("key", "Pass");
+        jg.writeNumberField("y", passVariants);
+        jg.writeEndObject();
 
-                        if (is1KGRareVariant(variantNode, 0.05) && isExACRareVariant(variantNode, 0.05)){
-                            //write functional annotations
-                            for (Relationship consequenceRel : variantNode.getRelationships(Direction.OUTGOING)) {
-                                Node annotationNode = consequenceRel.getEndNode();
+        jg.writeEndArray();
 
-                                if (annotationNode.hasLabel(Neo4j.getAnnotationLabel())){
+        jg.writeNumberField("Total", total);
 
-                                    for (Relationship inFeatureRel : annotationNode.getRelationships(Direction.OUTGOING, Neo4j.getHasInFeatureRelationship())) {
-                                        Node featureNode = inFeatureRel.getEndNode();
+        jg.writeEndObject();
 
-                                        if (featureNode.hasLabel(Neo4j.getFeatureLabel()) && featureNode.hasLabel(Neo4j.getCanonicalLabel())){
-
-                                            for (Relationship biotypeRel : featureNode.getRelationships(Direction.INCOMING)) {
-                                                Node symbolNode = biotypeRel.getStartNode();
-
-                                                if (symbolNode.hasLabel(Neo4j.getSymbolLabel())){
-
-                                                    jg.writeStartObject();
-
-                                                    writeVariantInformation(variantNode, jg);
-                                                    jg.writeStringField("Inheritance", getVariantInheritance(inheritanceRel.getType().name()));
-                                                    jg.writeNumberField("Occurrence", getGlobalVariantOccurrence(variantNode));
-
-                                                    writeSymbolInformation(symbolNode, jg);
-                                                    writeFeatureInformation(featureNode, jg);
-                                                    writeFunctionalAnnotation(annotationNode, consequenceRel, biotypeRel, jg);
-
-                                                    jg.writeEndObject();
-
-                                                }
-
-                                            }
-
-                                        }
-
-                                    }
-
-                                }
-
-                            }
-                        }
-
-                    }
-
-                }
-
-                jg.writeEndArray();
-
-                jg.flush();
-                jg.close();
-
-            }
-
-        };
-
-        return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
-    }
-
-    @POST
-    @Path("/rarecompoundhetworkflowv1")
-    @Consumes(MediaType.APPLICATION_JSON)
-    @Produces(MediaType.APPLICATION_JSON)
-    @Workflow(name = "Rare Compound Heterozygous Workflow v1", description = "A workflow to extract rare compound het calls.")
-    @Deprecated
-    public Response rareCompoundHetWorkflowv1(final String json) throws IOException {
-        StreamingOutput stream = new StreamingOutput() {
-
-            @Override
-            public void write(OutputStream os) throws IOException {
-
-                Parameters parameters = objectMapper.readValue(json, Parameters.class);
-                JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
-                HashMap<String, HashSet<Node>> callsByGene = new HashMap<>();
-                HashSet<Node> uniqueCompoundHetCalls = new HashSet<>();
-
-                jg.writeStartArray();
-
-                try (Transaction tx = graphDb.beginTx()) {
-                    Node runInfoNode = graphDb.getNodeById(parameters.RunInfoNodeId);
-
-                    //get all rare het calls
-                    for (Relationship inheritanceRel : runInfoNode.getRelationships(Neo4j.getHasHetVariantRelationship(), Direction.OUTGOING)) {
-                        Node variantNode = inheritanceRel.getEndNode();
-
-                        if (is1KGRareVariant(variantNode, 0.05) && isExACRareVariant(variantNode, 0.05)){
-
-                            for (Relationship inSymbolRelationship : variantNode.getRelationships(Direction.OUTGOING, Neo4j.getHasInSymbolRelationship())){
-
-                                Node symbolNode = inSymbolRelationship.getEndNode();
-                                String symbolId = symbolNode.getProperty("SymbolId").toString();
-
-                                if (!callsByGene.containsKey(symbolId)){
-                                    callsByGene.put(symbolId, new HashSet<Node>());
-                                }
-
-                                callsByGene.get(symbolId).add(variantNode);
-                            }
-
-                        }
-
-                    }
-
-                    //exclude calls from genes with less than 1 call
-                    for (Map.Entry<String, HashSet<Node>> iter : callsByGene.entrySet()){
-
-                        if (iter.getValue().size() > 1){
-                            for (Node variantNode : iter.getValue()){
-                                uniqueCompoundHetCalls.add(variantNode);
-                            }
-                        }
-                    }
-
-                    //make coumpound het calls unique && get print
-                    for (Node variantNode : uniqueCompoundHetCalls){
-
-                        //write functional annotations
-                        for (Relationship consequenceRel : variantNode.getRelationships(Direction.OUTGOING)) {
-                            Node annotationNode = consequenceRel.getEndNode();
-
-                            if (annotationNode.hasLabel(Neo4j.getAnnotationLabel())){
-
-                                for (Relationship inFeatureRel : annotationNode.getRelationships(Direction.OUTGOING, Neo4j.getHasInFeatureRelationship())) {
-                                    Node featureNode = inFeatureRel.getEndNode();
-
-                                    if (featureNode.hasLabel(Neo4j.getFeatureLabel()) && featureNode.hasLabel(Neo4j.getCanonicalLabel())){
-
-                                        for (Relationship biotypeRel : featureNode.getRelationships(Direction.INCOMING)) {
-                                            Node symbolNode = biotypeRel.getStartNode();
-
-                                            if (symbolNode.hasLabel(Neo4j.getSymbolLabel())){
-
-                                                jg.writeStartObject();
-
-                                                writeVariantInformation(variantNode, jg);
-                                                jg.writeStringField("Inheritance", "HET");
-                                                jg.writeNumberField("Occurrence", getGlobalVariantOccurrence(variantNode));
-
-                                                writeSymbolInformation(symbolNode, jg);
-                                                writeFeatureInformation(featureNode, jg);
-                                                writeFunctionalAnnotation(annotationNode, consequenceRel, biotypeRel, jg);
-
-                                                jg.writeEndObject();
-
-                                            }
-
-                                        }
-
-                                    }
-
-                                }
-
-                            }
-
-                        }
-
-                    }
-
-                }
-
-                jg.writeEndArray();
-
-                jg.flush();
-                jg.close();
-
-            }
-
-        };
-
-        return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
     }
 
     //helper functions
@@ -1512,6 +1347,7 @@ public class VariantDatabasePlugin
         try (Transaction tx = graphDb.beginTx()) {
 
             jg.writeNumberField("VariantNodeId", variantNode.getId());
+            jg.writeNumberField("Occurrence", getGlobalVariantOccurrence(variantNode));
 
             if (variantNode.hasProperty("VariantId")) {
                 jg.writeStringField("VariantId", variantNode.getProperty("VariantId").toString());
@@ -1596,7 +1432,7 @@ public class VariantDatabasePlugin
 
     }
 
-    //todo sort
+    //todo
     private boolean isClassificationPendingApproval(Node variantNode){
 
         try (Transaction tx = graphDb.beginTx()) {
@@ -1772,6 +1608,220 @@ public class VariantDatabasePlugin
         }*/
 
         jg.writeEndArray();
+    }
+
+    @POST
+    @Path("/addvariantpathogenicity")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response addVariantPathogenicity(final String json) throws IOException {
+        Parameters parameters = objectMapper.readValue(json, Parameters.class);
+
+        try (Transaction tx = graphDb.beginTx()) {
+
+            Node variantNode = graphDb.getNodeById(parameters.VariantNodeId);
+            Node userNode = graphDb.getNodeById(parameters.UserNodeId);
+
+            if (variantNode.hasLabel(Neo4j.getVariantLabel()) && userNode.hasLabel(Neo4j.getUserLabel())){
+
+                if (isClassificationPendingApproval(variantNode)){
+                    throw new UnsupportedOperationException("Variant has pending classification.");
+                }
+
+                Date date = new Date();
+
+                //create pathogenicity
+                Node pathogenicityNode = graphDb.createNode(Neo4j.getPathogenicityLabel());
+                variantNode.createRelationshipTo(pathogenicityNode, Neo4j.getHasPathogenicityRelationship());
+
+                Relationship addedByRelationship = pathogenicityNode.createRelationshipTo(userNode, Neo4j.getAddedByRelationship());
+
+                //add properties
+                addedByRelationship.setProperty("Classification", parameters.Classification);
+                addedByRelationship.setProperty("Date", date.getTime());
+                if (parameters.Evidence != null) addedByRelationship.setProperty("Evidence", parameters.Evidence);
+
+            }
+
+            tx.success();
+        } catch (UnsupportedOperationException e){
+            return Response
+                    .status(Response.Status.BAD_REQUEST)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        }
+
+        return Response
+                .status(Response.Status.OK)
+                .build();
+    }
+
+    @POST
+    @Path("/removevariantpathogenicity")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response removeVariantPathogenicity(final String json) throws IOException {
+
+        StreamingOutput stream = new StreamingOutput() {
+
+            @Override
+            public void write(OutputStream os) throws IOException, WebApplicationException {
+
+                Parameters parameters = objectMapper.readValue(json, Parameters.class);
+
+                try (Transaction tx = graphDb.beginTx()) {
+
+                    Node pathogenicityNode = graphDb.getNodeById(parameters.PathogenicityNodeId);
+                    Node userNode = graphDb.getNodeById(parameters.UserNodeId);
+
+                    if (pathogenicityNode.hasLabel(Neo4j.getPathogenicityLabel()) && userNode.hasLabel(Neo4j.getUserLabel())){
+
+                        Date date = new Date();
+
+                        //remove pathogenicity
+                        Relationship removedByRelationship = pathogenicityNode.createRelationshipTo(userNode, Neo4j.getRemovedByRelationship());
+
+                        //add properties
+                        removedByRelationship.setProperty("Date", date.getTime());
+                        if (parameters.Evidence != null) removedByRelationship.setProperty("Evidence", parameters.Evidence);
+
+                    }
+
+                    tx.success();
+                }
+
+            }
+
+        };
+
+        return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+    }
+
+    @POST
+    @Path("/authorisevariantpathogenicity")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response authoriseVariantPathogenicity(final String json) throws IOException {
+
+        StreamingOutput stream = new StreamingOutput() {
+
+            @Override
+            public void write(OutputStream os) throws IOException, WebApplicationException {
+
+                Parameters parameters = objectMapper.readValue(json, Parameters.class);
+
+                try (Transaction tx = graphDb.beginTx()) {
+
+                    Node pathogenicityNode = graphDb.getNodeById(parameters.PathogenicityNodeId);
+                    Node userNode = graphDb.getNodeById(parameters.UserNodeId);
+
+                    if (pathogenicityNode.hasLabel(Neo4j.getPathogenicityLabel()) && userNode.hasLabel(Neo4j.getUserLabel())){
+
+                        Date date = new Date();
+
+                        if (parameters.AddorRemove){
+                            Relationship relationship = pathogenicityNode.createRelationshipTo(userNode, Neo4j.getAddAuthorisedByRelationship());
+                            relationship.setProperty("Date", date.getTime());
+                        } else {
+                            Relationship relationship = pathogenicityNode.createRelationshipTo(userNode, Neo4j.getRemoveAuthorisedByRelationship());
+                            relationship.setProperty("Date", date.getTime());
+                        }
+
+                    }
+
+                    tx.success();
+                }
+
+            }
+
+        };
+
+        return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+    }
+
+    @GET
+    @Path("/getnewpathogenicitiesforauthorisation")
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response getNewPathogenicitiesForAuthorisation(final String json) {
+
+        StreamingOutput stream = new StreamingOutput() {
+
+            @Override
+            public void write(OutputStream os) throws IOException, WebApplicationException {
+
+                JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
+
+                jg.writeStartArray();
+
+                try (Transaction tx = graphDb.beginTx()) {
+                    try (ResourceIterator<Node> pathogenicityNodeIterator = graphDb.findNodes(Neo4j.getPathogenicityLabel())) {
+
+                        while (pathogenicityNodeIterator.hasNext()) {
+                            Node pathogenicityNode = pathogenicityNodeIterator.next();
+
+                            Relationship addedByRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getAddedByRelationship(), Direction.OUTGOING);
+                            Relationship removedByRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getRemovedByRelationship(), Direction.OUTGOING);
+                            Relationship addAuthorisedByRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getAddAuthorisedByRelationship(), Direction.OUTGOING);
+                            Relationship removeAuthorisedByRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getRemoveAuthorisedByRelationship(), Direction.OUTGOING);
+                            Relationship hasPathogenicityRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getHasPathogenicityRelationship(), Direction.INCOMING);
+
+                            if (addedByRelationship != null && removedByRelationship == null && addAuthorisedByRelationship == null && removeAuthorisedByRelationship == null){
+                                Node userNode = addedByRelationship.getEndNode();
+                                Node variantNode = hasPathogenicityRelationship.getStartNode();
+
+                                if (userNode.hasLabel(Neo4j.getUserLabel()) && variantNode.hasLabel(Neo4j.getVariantLabel())){
+
+                                    jg.writeStartObject();
+
+                                    if (variantNode.hasProperty("VariantId")) jg.writeStringField("VariantId", variantNode.getProperty("VariantId").toString());
+                                    jg.writeNumberField("PathogenicityNodeId", pathogenicityNode.getId());
+                                    if (addedByRelationship.hasProperty("Classification")) jg.writeNumberField("Classification", (int) addedByRelationship.getProperty("Classification"));
+                                    jg.writeBooleanField("AddAction", true);
+                                    if (userNode.hasProperty("UserId")) jg.writeStringField("UserId", userNode.getProperty("UserId").toString());
+                                    if (addedByRelationship.hasProperty("Date")) jg.writeNumberField("Date", (long) addedByRelationship.getProperty("Date"));
+                                    if (addedByRelationship.hasProperty("Evidence")) jg.writeStringField("Evidence", addedByRelationship.getProperty("Evidence").toString());
+
+                                    jg.writeEndObject();
+
+                                }
+
+                            } else if (addedByRelationship != null && removedByRelationship != null && removeAuthorisedByRelationship == null){
+                                Node userNode = removedByRelationship.getEndNode();
+                                Node variantNode = hasPathogenicityRelationship.getStartNode();
+
+                                if (userNode.hasLabel(Neo4j.getUserLabel()) && variantNode.hasLabel(Neo4j.getVariantLabel())){
+
+                                    jg.writeStartObject();
+
+                                    if (variantNode.hasProperty("VariantId")) jg.writeStringField("VariantId", variantNode.getProperty("VariantId").toString());
+                                    jg.writeNumberField("PathogenicityNodeId", pathogenicityNode.getId());
+                                    if (addedByRelationship.hasProperty("Classification")) jg.writeNumberField("Classification", (int) addedByRelationship.getProperty("Classification"));
+                                    jg.writeBooleanField("AddAction", false);
+                                    if (userNode.hasProperty("UserId")) jg.writeStringField("UserId", userNode.getProperty("UserId").toString());
+                                    if (removedByRelationship.hasProperty("Date")) jg.writeNumberField("Date", (long) removedByRelationship.getProperty("Date"));
+                                    if (removedByRelationship.hasProperty("Evidence")) jg.writeStringField("Evidence", removedByRelationship.getProperty("Evidence").toString());
+
+                                    jg.writeEndObject();
+
+                                }
+
+                            }
+
+                        }
+
+                    }
+                }
+
+                jg.writeEndArray();
+
+                jg.flush();
+                jg.close();
+
+            }
+
+        };
+
+        return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
     }
 
 }

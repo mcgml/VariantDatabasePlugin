@@ -14,10 +14,11 @@ public class Parameters {
     public String Evidence;
     public String VirtualPanelName;
     public String[] VirtualPanelList;
-    public Long[] excludedRunIds;
-    public Long[] panelNodeIds;
+    public Long[] excludeRunInfoNodes;
+    public Long[] includePanelNodes;
     public Long PanelNodeId;
     public Boolean AddorRemove;
     public String UserId;
     public String Password;
+    public String workflowName;
 }
