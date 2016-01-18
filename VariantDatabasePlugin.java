@@ -20,11 +20,7 @@ import javax.ws.rs.core.StreamingOutput;
 import org.codehaus.jackson.JsonEncoding;
 import org.codehaus.jackson.JsonGenerator;
 import org.codehaus.jackson.map.ObjectMapper;
-
 import org.neo4j.graphdb.*;
-import org.neo4j.graphdb.NotFoundException;
-
-//todo mask internal frequency for poorly sampled regions
 
 @Path("/variantdatabase")
 public class VariantDatabasePlugin
@@ -47,54 +43,66 @@ public class VariantDatabasePlugin
         String description();
     }
 
+    /*diagnostic*/
     @POST
     @Path("/returninputjson")
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
-    public Response returnInputJson(final String json) throws IOException {
+    public Response returnInputJson(final String json) {
         return Response.status( Response.Status.OK ).entity(
                 (json).getBytes( Charset.forName("UTF-8") ) ).build();
     }
 
+    /*info*/
     @GET
     @Path("/workflows")
     @Produces(MediaType.APPLICATION_JSON)
     public Response getWorkflows() {
 
-        StreamingOutput stream = new StreamingOutput() {
+        try {
 
-            @Override
-            public void write(OutputStream os) throws IOException, WebApplicationException {
-                JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
+            StreamingOutput stream = new StreamingOutput() {
 
-                jg.writeStartArray();
+                @Override
+                public void write(OutputStream os) throws IOException, WebApplicationException {
+                    JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
 
-                //print method names with get or post annotations
-                for (Method method : methods){
-                    if (method.isAnnotationPresent(Workflow.class) && !method.isAnnotationPresent(Deprecated.class)){
+                    jg.writeStartArray();
 
-                        jg.writeStartObject();
+                    //print method names with get or post annotations
+                    for (Method method : methods){
+                        if (method.isAnnotationPresent(Workflow.class) && !method.isAnnotationPresent(Deprecated.class)){
 
-                        jg.writeFieldName("Name");
-                        jg.writeString(method.getAnnotation(Workflow.class).name());
+                            jg.writeStartObject();
 
-                        jg.writeFieldName("Description");
-                        jg.writeString(method.getAnnotation(Workflow.class).description());
+                            jg.writeFieldName("name");
+                            jg.writeString(method.getAnnotation(Workflow.class).name());
 
-                        jg.writeEndObject();
+                            jg.writeFieldName("description");
+                            jg.writeString(method.getAnnotation(Workflow.class).description());
 
+                            jg.writeEndObject();
+
+                        }
                     }
+
+                    jg.writeEndArray();
+
+                    jg.flush();
+                    jg.close();
                 }
 
-                jg.writeEndArray();
+            };
 
-                jg.flush();
-                jg.close();
-            }
+            return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
 
-        };
+        } catch (Exception e) {
+            return Response
+                    .status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        }
 
-        return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
     }
 
     @GET
@@ -102,49 +110,59 @@ public class VariantDatabasePlugin
     @Produces(MediaType.APPLICATION_JSON)
     public Response getAnalyses() {
 
-        StreamingOutput stream = new StreamingOutput() {
+        try {
 
-            @Override
-            public void write(OutputStream os) throws IOException, WebApplicationException {
-                JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
+            StreamingOutput stream = new StreamingOutput() {
 
-                jg.writeStartArray();
+                @Override
+                public void write(OutputStream os) throws IOException, WebApplicationException {
+                    JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
 
-                try (Transaction tx = graphDb.beginTx()) {
-                    try (ResourceIterator<Node> sampleNodes = graphDb.findNodes(Neo4j.getSampleLabel())) {
+                    jg.writeStartArray();
 
-                        while (sampleNodes.hasNext()) {
-                            Node sampleNode = sampleNodes.next();
+                    try (Transaction tx = graphDb.beginTx()) {
+                        try (ResourceIterator<Node> sampleNodes = graphDb.findNodes(VariantDatabase.getSampleLabel())) {
 
-                            for (Relationship relationship : sampleNode.getRelationships(Direction.OUTGOING, Neo4j.getHasAnalysisRelationship())) {
-                                Node runInfoNode = relationship.getEndNode();
+                            while (sampleNodes.hasNext()) {
+                                Node sampleNode = sampleNodes.next();
 
-                                if (runInfoNode.hasLabel(Neo4j.getRunInfoLabel())){
+                                for (Relationship relationship : sampleNode.getRelationships(Direction.OUTGOING, VariantDatabase.getHasAnalysisRelationship())) {
+                                    Node runInfoNode = relationship.getEndNode();
 
-                                    jg.writeStartObject();
+                                    if (runInfoNode.hasLabel(VariantDatabase.getRunInfoLabel())){
 
-                                    writeSampleInformation(sampleNode, jg);
-                                    writeRunInformation(runInfoNode, jg);
+                                        jg.writeStartObject();
 
-                                    jg.writeEndObject();
+                                        writeSampleInformation(sampleNode, jg);
+                                        writeRunInformation(runInfoNode, jg);
 
+                                        jg.writeEndObject();
+
+                                    }
                                 }
                             }
-                        }
 
-                        sampleNodes.close();
+                            sampleNodes.close();
+                        }
                     }
+
+                    jg.writeEndArray();
+
+                    jg.flush();
+                    jg.close();
                 }
 
-                jg.writeEndArray();
+            };
 
-                jg.flush();
-                jg.close();
-            }
+            return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
 
-        };
+        } catch (Exception e) {
+            return Response
+                    .status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        }
 
-        return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
     }
 
     @GET
@@ -152,86 +170,116 @@ public class VariantDatabasePlugin
     @Produces(MediaType.APPLICATION_JSON)
     public Response getVirtualPanels() {
 
-        StreamingOutput stream = new StreamingOutput() {
+        try {
 
-            @Override
-            public void write(OutputStream os) throws IOException, WebApplicationException {
-                JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
+            StreamingOutput stream = new StreamingOutput() {
 
-                jg.writeStartArray();
+                @Override
+                public void write(OutputStream os) throws IOException, WebApplicationException {
+                    JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
 
-                try (Transaction tx = graphDb.beginTx()) {
-                    try (ResourceIterator<Node> virtualPanelNodes = graphDb.findNodes(Neo4j.getVirtualPanelLabel())) {
+                    jg.writeStartArray();
 
-                        while (virtualPanelNodes.hasNext()) {
-                            Node virtualPanelNode = virtualPanelNodes.next();
+                    try (Transaction tx = graphDb.beginTx()) {
+                        try (ResourceIterator<Node> virtualPanelNodes = graphDb.findNodes(VariantDatabase.getVirtualPanelLabel())) {
 
-                            jg.writeStartObject();
+                            while (virtualPanelNodes.hasNext()) {
+                                Node virtualPanelNode = virtualPanelNodes.next();
 
-                            writeVirtualPanelInformation(virtualPanelNode, jg);
+                                jg.writeStartObject();
 
-                            jg.writeEndObject();
+                                writeVirtualPanelInformation(virtualPanelNode, jg);
 
+                                jg.writeEndObject();
+
+                            }
+
+                            virtualPanelNodes.close();
                         }
-
-                        virtualPanelNodes.close();
                     }
+
+                    jg.writeEndArray();
+
+                    jg.flush();
+                    jg.close();
                 }
 
-                jg.writeEndArray();
+            };
 
-                jg.flush();
-                jg.close();
-            }
+            return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
 
-        };
+        } catch (Exception e) {
+            return Response
+                    .status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        }
 
-        return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
     }
 
     @POST
     @Path("/variantinformation")
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
-    public Response getVariantInformation(final String json) throws IOException {
+    public Response getVariantInformation(final String json) {
 
-        StreamingOutput stream = new StreamingOutput() {
+        try {
 
-            @Override
-            public void write(OutputStream os) throws IOException, WebApplicationException {
+            StreamingOutput stream = new StreamingOutput() {
 
-                JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
-                Parameters parameters = objectMapper.readValue(json, Parameters.class);
-                Node variantNode = null;
+                @Override
+                public void write(OutputStream os) throws IOException, WebApplicationException {
 
-                try (Transaction tx = graphDb.beginTx()) {
+                    JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
+                    Parameters parameters = objectMapper.readValue(json, Parameters.class);
+                    Node variantNode = null;
+
+                    jg.writeStartObject();
 
                     //find variant
-                    try (ResourceIterator<Node> variants = graphDb.findNodes(Neo4j.getVariantLabel(), "VariantId", parameters.VariantId)) {
-                        while (variants.hasNext()) {
-                            variantNode = variants.next();
+                    try (Transaction tx = graphDb.beginTx()) {
+
+                        //find variant
+                        try (ResourceIterator<Node> variants = graphDb.findNodes(VariantDatabase.getVariantLabel(), "variantId", parameters.variantId)) {
+                            while (variants.hasNext()) {
+                                variantNode = variants.next();
+                            }
+                            variants.close();
                         }
-                        variants.close();
+
                     }
+
+                    //print variant info
+                    if (variantNode != null){
+                        writeVariantInformation(variantNode, jg);
+
+                        //write user action history
+                        try (Transaction tx = graphDb.beginTx()) {
+                            jg.writeArrayFieldStart("history");
+
+                            for (Relationship relationship : variantNode.getRelationships(Direction.OUTGOING, VariantDatabase.getHasPathogenicityRelationship())){
+                                writeActionHistory(relationship.getEndNode(), jg);
+                            }
+
+                            jg.writeEndArray();
+                        }
+                    }
+
+                    jg.writeEndObject();
+
+                    jg.flush();
+                    jg.close();
                 }
 
-                jg.writeStartObject();
+            };
 
-                if (variantNode != null){
-                    writeVariantInformation(variantNode, jg);
-                    writeVariantHistory(variantNode, jg);
-                    jg.writeNumberField("Occurrence", getGlobalVariantOccurrence(variantNode));
-                }
-
-                jg.writeEndObject();
-
-                jg.flush();
-                jg.close();
-            }
-
-        };
-
-        return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+            return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+        } catch (Exception e) {
+            return Response
+                    .status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        }
 
     }
 
@@ -239,42 +287,50 @@ public class VariantDatabasePlugin
     @Path("/featureinformation")
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
-    public Response getFeatureInformation(final String json) throws IOException {
+    public Response getFeatureInformation(final String json) {
 
-        StreamingOutput stream = new StreamingOutput() {
+        try {
 
-            @Override
-            public void write(OutputStream os) throws IOException, WebApplicationException {
+            StreamingOutput stream = new StreamingOutput() {
 
-                JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
-                Parameters parameters = objectMapper.readValue(json, Parameters.class);
-                Node featureNode = null;
+                @Override
+                public void write(OutputStream os) throws IOException, WebApplicationException {
 
-                jg.writeStartObject();
+                    JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
+                    Parameters parameters = objectMapper.readValue(json, Parameters.class);
+                    Node featureNode = null;
 
-                try (Transaction tx = graphDb.beginTx()) {
+                    jg.writeStartObject();
 
-                    try (ResourceIterator<Node> features = graphDb.findNodes(Neo4j.getFeatureLabel(), "FeatureId", parameters.FeatureId)) {
-                        while (features.hasNext()) {
-                            featureNode = features.next();
+                    try (Transaction tx = graphDb.beginTx()) {
+
+                        try (ResourceIterator<Node> features = graphDb.findNodes(VariantDatabase.getFeatureLabel(), "featureId", parameters.featureId)) {
+                            while (features.hasNext()) {
+                                featureNode = features.next();
+                            }
+                            features.close();
                         }
-                        features.close();
+
+                        writeFeatureInformation(featureNode, jg);
+
                     }
 
-                    writeFeatureInformation(featureNode, jg);
-                    writeFeatureHistory(featureNode, jg);
+                    jg.writeEndObject();
 
+                    jg.flush();
+                    jg.close();
                 }
 
-                jg.writeEndObject();
+            };
 
-                jg.flush();
-                jg.close();
-            }
+            return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
 
-        };
-
-        return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+        } catch (Exception e) {
+            return Response
+                    .status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        }
 
     }
 
@@ -282,95 +338,107 @@ public class VariantDatabasePlugin
     @Path("/variantobservations")
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
-    public Response getVariantObservations(final String json) throws IOException {
+    public Response getVariantObservations(final String json) {
 
-        StreamingOutput stream = new StreamingOutput() {
+        try {
 
-            @Override
-            public void write(OutputStream os) throws IOException, WebApplicationException {
+            StreamingOutput stream = new StreamingOutput() {
 
-                JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
-                Parameters parameters = objectMapper.readValue(json, Parameters.class);
+                @Override
+                public void write(OutputStream os) throws IOException, WebApplicationException {
 
-                jg.writeStartArray();
+                    JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
+                    Parameters parameters = objectMapper.readValue(json, Parameters.class);
 
-                try (Transaction tx = graphDb.beginTx()) {
-                    Node variantNode = graphDb.getNodeById(parameters.VariantNodeId);
+                    jg.writeStartArray();
 
-                    for (Relationship inheritanceRel : variantNode.getRelationships(Direction.INCOMING)) {
-                        Node runInfoNode = inheritanceRel.getStartNode();
+                    try (Transaction tx = graphDb.beginTx()) {
+                        Node variantNode = graphDb.getNodeById(parameters.variantNodeId);
 
-                        if (runInfoNode.hasLabel(Neo4j.getRunInfoLabel())){
-                            Node sampleNode = runInfoNode.getSingleRelationship(Neo4j.getHasAnalysisRelationship(), Direction.INCOMING).getStartNode();
+                        for (Relationship inheritanceRel : variantNode.getRelationships(Direction.INCOMING)) {
+                            Node runInfoNode = inheritanceRel.getStartNode();
 
-                            if (sampleNode.hasLabel(Neo4j.getSampleLabel())){
-                                jg.writeStartObject();
+                            if (runInfoNode.hasLabel(VariantDatabase.getRunInfoLabel())){
+                                Node sampleNode = runInfoNode.getSingleRelationship(VariantDatabase.getHasAnalysisRelationship(), Direction.INCOMING).getStartNode();
 
-                                writeSampleInformation(sampleNode, jg);
-                                jg.writeStringField("Inheritance", getVariantInheritance(inheritanceRel.getType().name()));
-                                writeRunInformation(runInfoNode, jg);
+                                if (sampleNode.hasLabel(VariantDatabase.getSampleLabel())){
+                                    jg.writeStartObject();
 
-                                jg.writeEndObject();
+                                    writeSampleInformation(sampleNode, jg);
+                                    jg.writeStringField("inheritance", getVariantInheritance(inheritanceRel.getType().name()));
+                                    writeRunInformation(runInfoNode, jg);
+
+                                    jg.writeEndObject();
+                                }
+
                             }
 
                         }
 
                     }
 
+                    jg.writeEndArray();
+
+                    jg.flush();
+                    jg.close();
                 }
 
-                jg.writeEndArray();
+            };
 
-                jg.flush();
-                jg.close();
-            }
-
-        };
-
-        return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+            return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+        } catch (Exception e) {
+            return Response
+                    .status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        }
     }
 
     @POST
     @Path("/functionalannotation")
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
-    public Response getFunctionalAnnotation(final String json) throws IOException {
+    public Response getFunctionalAnnotation(final String json) {
 
-        StreamingOutput stream = new StreamingOutput() {
+        try {
 
-            @Override
-            public void write(OutputStream os) throws IOException, WebApplicationException {
+            StreamingOutput stream = new StreamingOutput() {
 
-                JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
-                Parameters parameters = objectMapper.readValue(json, Parameters.class);
+                @Override
+                public void write(OutputStream os) throws IOException, WebApplicationException {
 
-                jg.writeStartArray();
+                    JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
+                    Parameters parameters = objectMapper.readValue(json, Parameters.class);
 
-                try (Transaction tx = graphDb.beginTx()) {
-                    Node variantNode = graphDb.getNodeById(parameters.VariantNodeId);
+                    jg.writeStartArray();
 
-                    for (Relationship consequenceRel : variantNode.getRelationships(Direction.OUTGOING)) {
-                        Node annotationNode = consequenceRel.getEndNode();
+                    try (Transaction tx = graphDb.beginTx()) {
+                        Node variantNode = graphDb.getNodeById(parameters.variantNodeId);
 
-                        if (annotationNode.hasLabel(Neo4j.getAnnotationLabel())){
+                        for (Relationship consequenceRel : variantNode.getRelationships(Direction.OUTGOING)) {
+                            Node annotationNode = consequenceRel.getEndNode();
 
-                            for (Relationship inFeatureRel : annotationNode.getRelationships(Direction.OUTGOING, Neo4j.getHasInFeatureRelationship())) {
-                                Node featureNode = inFeatureRel.getEndNode();
+                            if (annotationNode.hasLabel(VariantDatabase.getAnnotationLabel())){
 
-                                if (featureNode.hasLabel(Neo4j.getFeatureLabel())){
+                                for (Relationship inFeatureRel : annotationNode.getRelationships(Direction.OUTGOING, VariantDatabase.getInFeatureRelationship())) {
+                                    Node featureNode = inFeatureRel.getEndNode();
 
-                                    for (Relationship biotypeRel : featureNode.getRelationships(Direction.INCOMING)) {
-                                        Node symbolNode = biotypeRel.getStartNode();
+                                    if (featureNode.hasLabel(VariantDatabase.getFeatureLabel())){
 
-                                        if (symbolNode.hasLabel(Neo4j.getSymbolLabel())){
+                                        for (Relationship biotypeRel : featureNode.getRelationships(Direction.INCOMING)) {
+                                            Node symbolNode = biotypeRel.getStartNode();
 
-                                            jg.writeStartObject();
+                                            if (symbolNode.hasLabel(VariantDatabase.getSymbolLabel())){
 
-                                            writeSymbolInformation(symbolNode, jg);
-                                            writeFeatureInformation(featureNode, jg);
-                                            writeFunctionalAnnotation(annotationNode, consequenceRel, biotypeRel, jg);
+                                                jg.writeStartObject();
 
-                                            jg.writeEndObject();
+                                                writeSymbolInformation(symbolNode, jg);
+                                                writeFeatureInformation(featureNode, jg);
+                                                writeFunctionalAnnotation(annotationNode, consequenceRel, biotypeRel, jg);
+
+                                                jg.writeEndObject();
+
+                                            }
 
                                         }
 
@@ -384,206 +452,135 @@ public class VariantDatabasePlugin
 
                     }
 
+                    jg.writeEndArray();
+
+                    jg.flush();
+                    jg.close();
                 }
 
-                jg.writeEndArray();
+            };
 
-                jg.flush();
-                jg.close();
-            }
-
-        };
-
-        return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
-    }
-
-    @POST
-    @Path("/addvirtualpanel")
-    @Consumes(MediaType.APPLICATION_JSON)
-    @Produces(MediaType.APPLICATION_JSON)
-    public Response addVirtualPanel(final String json) throws IOException {
-
-        Date date = new Date();
-        HashMap<String, Object> properties = new HashMap<>();
-        Parameters parameters = objectMapper.readValue(json, Parameters.class);
-
-        try (Transaction tx = graphDb.beginTx()) {
-            Node userNode = graphDb.getNodeById(parameters.UserNodeId);
-
-            if (userNode.hasLabel(Neo4j.getUserLabel())){
-
-                //make panel node
-                properties.put("VirtualPanelName", parameters.VirtualPanelName);
-                Node virtualPanelNode = Neo4j.addNode(graphDb, Neo4j.getVirtualPanelLabel(), properties);
-                properties.clear();
-
-                //link to user
-                Relationship designedByRelationship = virtualPanelNode.createRelationshipTo(userNode, Neo4j.getHasDesignedBy());
-                designedByRelationship.setProperty("Date", date.getTime());
-
-                //link to genes
-                for (String gene : parameters.VirtualPanelList){
-
-                    //match or create gene
-                    Node geneNode = Neo4j.matchOrCreateUniqueNode(graphDb, Neo4j.getSymbolLabel(), "SymbolId", gene);
-
-                    //link to virtual panel
-                    virtualPanelNode.createRelationshipTo(geneNode, Neo4j.getHasContainsSymbolRelationship());
-                }
-
-
-            }
-
-            tx.success();
-        } catch (UnsupportedOperationException e){
+            return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+        } catch (Exception e) {
             return Response
-                    .status(Response.Status.BAD_REQUEST)
+                    .status(Response.Status.INTERNAL_SERVER_ERROR)
                     .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
                     .build();
         }
-
-        return Response
-                .status(Response.Status.OK)
-                .build();
     }
 
     @POST
     @Path("/getvirtualpanel")
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
-    public Response getVirtualPanel(final String json) throws IOException {
+    public Response getVirtualPanel(final String json) {
 
-        StreamingOutput stream = new StreamingOutput() {
+        try {
+            StreamingOutput stream = new StreamingOutput() {
 
-            @Override
-            public void write(OutputStream os) throws IOException, WebApplicationException {
+                @Override
+                public void write(OutputStream os) throws IOException, WebApplicationException {
 
-                JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
-                Parameters parameters = objectMapper.readValue(json, Parameters.class);
+                    JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
+                    Parameters parameters = objectMapper.readValue(json, Parameters.class);
 
-                jg.writeStartObject();
+                    jg.writeStartObject();
 
-                try (Transaction tx = graphDb.beginTx()) {
-                    Node panelNode = graphDb.getNodeById(parameters.PanelNodeId);
+                    try (Transaction tx = graphDb.beginTx()) {
+                        Node panelNode = graphDb.getNodeById(parameters.panelNodeId);
 
-                    writeVirtualPanelInformation(panelNode, jg);
+                        writeVirtualPanelInformation(panelNode, jg);
 
-                    jg.writeArrayFieldStart("Symbols");
+                        jg.writeArrayFieldStart("symbols");
 
-                    for (Relationship containsSymbol : panelNode.getRelationships(Direction.OUTGOING, Neo4j.getHasContainsSymbol())){
-                        Node symbolNode = containsSymbol.getEndNode();
+                        for (Relationship containsSymbol : panelNode.getRelationships(Direction.OUTGOING, VariantDatabase.getContainsSymbolRelationship())){
+                            Node symbolNode = containsSymbol.getEndNode();
 
-                        if (symbolNode.hasLabel(Neo4j.getSymbolLabel())){
+                            if (symbolNode.hasLabel(VariantDatabase.getSymbolLabel())){
 
-                            jg.writeStartObject();
-                            writeSymbolInformation(symbolNode, jg);
-                            jg.writeEndObject();
+                                jg.writeStartObject();
+                                writeSymbolInformation(symbolNode, jg);
+                                jg.writeEndObject();
+
+                            }
 
                         }
 
+                        jg.writeEndArray();
                     }
 
-                    jg.writeEndArray();
+                    jg.writeEndObject();
+
+                    jg.flush();
+                    jg.close();
                 }
 
-                jg.writeEndObject();
+            };
 
-                jg.flush();
-                jg.close();
-            }
-
-        };
-
-        return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+            return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+        } catch (Exception e) {
+            return Response
+                    .status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        }
     }
 
     @POST
     @Path("/getuserinformation")
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
-    public Response getUserInformation(final String json) throws IOException {
+    public Response getUserInformation(final String json) {
 
-        StreamingOutput stream = new StreamingOutput() {
+        try{
 
-            @Override
-            public void write(OutputStream os) throws IOException, WebApplicationException {
+            StreamingOutput stream = new StreamingOutput() {
 
-                JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
-                Parameters parameters = objectMapper.readValue(json, Parameters.class);
-                Node userNode = null;
+                @Override
+                public void write(OutputStream os) throws IOException, WebApplicationException {
 
-                try (Transaction tx = graphDb.beginTx()) {
+                    JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
+                    Parameters parameters = objectMapper.readValue(json, Parameters.class);
+                    Node userNode = null;
 
-                    //find variant
-                    try (ResourceIterator<Node> users = graphDb.findNodes(Neo4j.getUserLabel(), "UserId", parameters.UserId)) {
-                        while (users.hasNext()) {
-                            userNode = users.next();
+                    try (Transaction tx = graphDb.beginTx()) {
+
+                        //find variant
+                        try (ResourceIterator<Node> users = graphDb.findNodes(VariantDatabase.getUserLabel(), "userId", parameters.userId)) {
+                            while (users.hasNext()) {
+                                userNode = users.next();
+                            }
+                            users.close();
                         }
-                        users.close();
+
                     }
 
+                    jg.writeStartObject();
+                    if (userNode != null) writeFullUserInformation(userNode, jg);
+                    jg.writeEndObject();
+
+                    jg.flush();
+                    jg.close();
                 }
 
-                jg.writeStartObject();
-                if (userNode != null) writeUserInformation(userNode, jg);
-                jg.writeEndObject();
+            };
 
-                jg.flush();
-                jg.close();
-            }
+            return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
 
-        };
-
-        return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
-    }
-
-    @POST
-    @Path("/updateuserpassword")
-    @Consumes(MediaType.APPLICATION_JSON)
-    @Produces(MediaType.APPLICATION_JSON)
-    public Response updateUserPassword(final String json) throws IOException {
-
-        Parameters parameters = objectMapper.readValue(json, Parameters.class);
-
-        try (Transaction tx = graphDb.beginTx()) {
-            Node userNode = graphDb.getNodeById(parameters.UserNodeId);
-            userNode.removeProperty("Password");
-            userNode.setProperty("Password", parameters.Password);
-            tx.success();
+        } catch (Exception e) {
+            return Response
+                    .status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
         }
-
-        return Response.status(Response.Status.OK).build();
     }
 
-    @POST
-    @Path("/createnewuser")
-    @Consumes(MediaType.APPLICATION_JSON)
-    @Produces(MediaType.APPLICATION_JSON)
-    public Response createNewUser(final String json) throws IOException {
-
-        User user = objectMapper.readValue(json, User.class);
-        HashMap<String, Object> properties = new HashMap<>();
-
-        properties.put("FullName", user.FullName);
-        properties.put("Password", user.Password);
-        properties.put("JobTitle", user.JobTitle);
-        properties.put("UserId", user.UserId);
-        properties.put("ContactNumber", user.ContactNumber);
-        properties.put("Admin", user.Admin);
-
-        try (Transaction tx = graphDb.beginTx()) {
-            Neo4j.addNode(graphDb, Neo4j.getUserLabel(), properties);
-            tx.success();
-        }
-
-        return Response.status(Response.Status.OK).build();
-    }
-
+    /*workflows*/
     @POST
     @Path("/getfilteredvariants")
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
-    public Response getFilteredVariants(final String json) throws IOException {
+    public Response getFilteredVariants(final String json) {
         StreamingOutput stream = new StreamingOutput() {
 
             @Override
@@ -597,18 +594,22 @@ public class VariantDatabasePlugin
                 Node runInfoNode;
 
                 try (Transaction tx = graphDb.beginTx()) {
-                    runInfoNode = graphDb.getNodeById(parameters.RunInfoNodeId);
+                    runInfoNode = graphDb.getNodeById(parameters.runInfoNodeId);
                 }
 
                 //exec workflow
                 switch (parameters.workflowName) {
-                    case "Autosomal Dominant Workflow v1":  runAutosomalDominantWorkflowv1(jg, excludeRunInfoNodes, includePanelNodes, runInfoNode);
+                    case "Autosomal Dominant Workflow v1":
+                        runAutosomalDominantWorkflowv1(jg, excludeRunInfoNodes, includePanelNodes, runInfoNode);
                         break;
-                    case "Rare Homozygous Workflow v1":  runRareHomozygousWorkflowv1(jg, excludeRunInfoNodes, includePanelNodes, runInfoNode);
+                    case "Rare Homozygous Workflow v1":
+                        runRareHomozygousWorkflowv1(jg, excludeRunInfoNodes, includePanelNodes, runInfoNode);
                         break;
-                    case "Autosomal Recessive Workflow v1":  runAutosomalRecessiveWorkflowv1(jg, excludeRunInfoNodes, includePanelNodes, runInfoNode);
+                    case "Autosomal Recessive Workflow v1":
+                        runAutosomalRecessiveWorkflowv1(jg, excludeRunInfoNodes, includePanelNodes, runInfoNode);
                         break;
-                    default: throw new IllegalArgumentException("Unknown workflow");
+                    default:
+                        throw new IllegalArgumentException("Unknown workflow");
                 }
 
                 jg.flush();
@@ -621,7 +622,7 @@ public class VariantDatabasePlugin
         return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
     }
 
-    @Workflow(name = "Autosomal Dominant Workflow v1", description = "A workflow to extract rare autosomal heterozygous calls")
+    @Workflow(name = "Autosomal Dominant Workflow v1", description = "A workflow to prioritise rare autosomal heterozygous calls")
     public void runAutosomalDominantWorkflowv1(JsonGenerator jg, HashSet<Long> excludeRunInfoNodes, HashSet<Long> includePanelNodes, Node runInfoNode) throws IOException {
 
         boolean includeCallsFromPanel = false, excludeCallsFromSample = false;
@@ -632,7 +633,7 @@ public class VariantDatabasePlugin
 
         jg.writeStartObject();
 
-        jg.writeFieldName("Variants");
+        jg.writeFieldName("variants");
         jg.writeStartArray();
 
         try (Transaction tx = graphDb.beginTx()) {
@@ -653,23 +654,23 @@ public class VariantDatabasePlugin
                 jg.writeStartObject();
 
                 writeVariantInformation(variantNode, jg);
-                jg.writeStringField("Inheritance", getVariantInheritance(inheritanceRel.getType().name()));
+                jg.writeStringField("inheritance", getVariantInheritance(inheritanceRel.getType().name()));
 
                 //stratify variants
-                if (inheritanceRel.isType(Neo4j.getHasHomVariantRelationship())) {
-                    jg.writeNumberField("Filter", 0);
+                if (inheritanceRel.isType(VariantDatabase.getHasHomVariantRelationship())) {
+                    jg.writeNumberField("filter", 0);
                     notHeterozygousVariants++;
-                } else if (!variantNode.hasLabel(Neo4j.getAutoChromosomeLabel())) {
-                    jg.writeNumberField("Filter", 1);
+                } else if (!variantNode.hasLabel(VariantDatabase.getAutosomeLabel())) {
+                    jg.writeNumberField("filter", 1);
                     notAutosomalVariants++;
                 } else if (!isExACRareVariant(variantNode, 0.01)) {
-                    jg.writeNumberField("Filter", 2);
+                    jg.writeNumberField("filter", 2);
                     notExACRareVariants++;
                 } else if (!is1KGRareVariant(variantNode, 0.01)) {
-                    jg.writeNumberField("Filter", 3);
+                    jg.writeNumberField("filter", 3);
                     not1KGRareVariants++;
                 } else {
-                    jg.writeNumberField("Filter", 4);
+                    jg.writeNumberField("filter", 4);
                     passVariants++;
                 }
 
@@ -684,7 +685,7 @@ public class VariantDatabasePlugin
         jg.writeEndArray();
 
         //write filters
-        jg.writeFieldName("Filters");
+        jg.writeFieldName("filters");
         jg.writeStartArray();
 
         jg.writeStartObject();
@@ -714,13 +715,13 @@ public class VariantDatabasePlugin
 
         jg.writeEndArray();
 
-        jg.writeNumberField("Total", total);
+        jg.writeNumberField("total", total);
 
         jg.writeEndObject();
 
     }
 
-    @Workflow(name = "Rare Homozygous Workflow v1", description = "A workflow to extract rare homozygous calls")
+    @Workflow(name = "Rare Homozygous Workflow v1", description = "A workflow to prioritise rare homozygous calls")
     public void runRareHomozygousWorkflowv1(JsonGenerator jg, HashSet<Long> excludeRunInfoNodes, HashSet<Long> includePanelNodes, Node runInfoNode) throws IOException {
 
         boolean includeCallsFromPanel = false, excludeCallsFromSample = false;
@@ -731,7 +732,7 @@ public class VariantDatabasePlugin
 
         jg.writeStartObject();
 
-        jg.writeFieldName("Variants");
+        jg.writeFieldName("variants");
         jg.writeStartArray();
 
         try (Transaction tx = graphDb.beginTx()) {
@@ -752,20 +753,20 @@ public class VariantDatabasePlugin
                 jg.writeStartObject();
 
                 writeVariantInformation(variantNode, jg);
-                jg.writeStringField("Inheritance", getVariantInheritance(inheritanceRel.getType().name()));
+                jg.writeStringField("inheritance", getVariantInheritance(inheritanceRel.getType().name()));
 
                 //stratify variants
-                if (inheritanceRel.isType(Neo4j.getHasHetVariantRelationship())) {
-                    jg.writeNumberField("Filter", 0);
+                if (inheritanceRel.isType(VariantDatabase.getHasHetVariantRelationship())) {
+                    jg.writeNumberField("filter", 0);
                     notHomozygousVariants++;
                 } else if (!isExACRareVariant(variantNode, 0.05)) {
-                    jg.writeNumberField("Filter", 1);
+                    jg.writeNumberField("filter", 1);
                     notExACRareVariants++;
                 } else if (!is1KGRareVariant(variantNode, 0.05)) {
-                    jg.writeNumberField("Filter", 2);
+                    jg.writeNumberField("filter", 2);
                     not1KGRareVariants++;
                 } else {
-                    jg.writeNumberField("Filter", 3);
+                    jg.writeNumberField("filter", 3);
                     passVariants++;
                 }
 
@@ -780,7 +781,7 @@ public class VariantDatabasePlugin
         jg.writeEndArray();
 
         //write filters
-        jg.writeFieldName("Filters");
+        jg.writeFieldName("filter");
         jg.writeStartArray();
 
         jg.writeStartObject();
@@ -805,13 +806,13 @@ public class VariantDatabasePlugin
 
         jg.writeEndArray();
 
-        jg.writeNumberField("Total", total);
+        jg.writeNumberField("total", total);
 
         jg.writeEndObject();
 
     }
 
-    @Workflow(name = "Autosomal Recessive Workflow v1", description = "A workflow to extract rare autosomal compound calls")
+    @Workflow(name = "Autosomal Recessive Workflow v1", description = "A workflow to prioritise rare autosomal compound calls")
     public void runAutosomalRecessiveWorkflowv1(JsonGenerator jg, HashSet<Long> excludeRunInfoNodes, HashSet<Long> includePanelNodes, Node runInfoNode) throws IOException {
 
         boolean includeCallsFromPanel = false, excludeCallsFromSample = false, hasAssociatedSymbol;
@@ -824,7 +825,7 @@ public class VariantDatabasePlugin
 
         jg.writeStartObject();
 
-        jg.writeFieldName("Variants");
+        jg.writeFieldName("variants");
         jg.writeStartArray();
 
         try (Transaction tx = graphDb.beginTx()) {
@@ -843,12 +844,12 @@ public class VariantDatabasePlugin
                 }
 
                 //stratify variants
-                if (!variantNode.hasLabel(Neo4j.getAutoChromosomeLabel())) {
+                if (!variantNode.hasLabel(VariantDatabase.getAutosomeLabel())) {
                     jg.writeStartObject();
 
                     writeVariantInformation(variantNode, jg);
-                    jg.writeStringField("Inheritance", getVariantInheritance(inheritanceRel.getType().name()));
-                    jg.writeNumberField("Filter", 0);
+                    jg.writeStringField("inheritance", getVariantInheritance(inheritanceRel.getType().name()));
+                    jg.writeNumberField("filter", 0);
 
                     notAutosomalVariants++;
                     total++;
@@ -858,8 +859,8 @@ public class VariantDatabasePlugin
                     jg.writeStartObject();
 
                     writeVariantInformation(variantNode, jg);
-                    jg.writeStringField("Inheritance", getVariantInheritance(inheritanceRel.getType().name()));
-                    jg.writeNumberField("Filter", 1);
+                    jg.writeStringField("inheritance", getVariantInheritance(inheritanceRel.getType().name()));
+                    jg.writeNumberField("filter", 1);
 
                     notExACRareVariants++;
                     total++;
@@ -869,8 +870,8 @@ public class VariantDatabasePlugin
                     jg.writeStartObject();
 
                     writeVariantInformation(variantNode, jg);
-                    jg.writeStringField("Inheritance", getVariantInheritance(inheritanceRel.getType().name()));
-                    jg.writeNumberField("Filter", 2);
+                    jg.writeStringField("inheritance", getVariantInheritance(inheritanceRel.getType().name()));
+                    jg.writeNumberField("filter", 2);
 
                     not1KGRareVariants++;
                     total++;
@@ -878,11 +879,11 @@ public class VariantDatabasePlugin
                     jg.writeEndObject();
                 } else {
                     hasAssociatedSymbol = false;
-                    for (Relationship inSymbolRelationship : variantNode.getRelationships(Direction.OUTGOING, Neo4j.getHasInSymbolRelationship())){
+                    for (Relationship inSymbolRelationship : variantNode.getRelationships(Direction.OUTGOING, VariantDatabase.getInSymbolRelationship())){
 
                         hasAssociatedSymbol = true;
                         Node symbolNode = inSymbolRelationship.getEndNode();
-                        String symbolId = symbolNode.getProperty("SymbolId").toString();
+                        String symbolId = symbolNode.getProperty("symbolId").toString();
 
                         if (!callsByGene.containsKey(symbolId)){
                             callsByGene.put(symbolId, new HashSet<Node>());
@@ -897,7 +898,7 @@ public class VariantDatabasePlugin
 
                         writeVariantInformation(variantNode, jg);
                         jg.writeStringField("Inheritance", getVariantInheritance(inheritanceRel.getType().name()));
-                        jg.writeNumberField("Filter", 3);
+                        jg.writeNumberField("filter", 3);
 
                         noAnnotation++;
                         total++;
@@ -924,11 +925,11 @@ public class VariantDatabasePlugin
                         //find inheritance
                         for (Relationship inheritanceRel : variantNode.getRelationships(Direction.INCOMING)){
                             if (inheritanceRel.getStartNode().equals(runInfoNode)){
-                                jg.writeStringField("Inheritance", getVariantInheritance(inheritanceRel.getType().name()));
+                                jg.writeStringField("inheritance", getVariantInheritance(inheritanceRel.getType().name()));
                             }
                         }
 
-                        jg.writeNumberField("Filter", 4);
+                        jg.writeNumberField("filter", 4);
 
                         singleGeneChange++;
                         total++;
@@ -949,11 +950,11 @@ public class VariantDatabasePlugin
                         //find inheritance
                         for (Relationship inheritanceRel : variantNode.getRelationships(Direction.INCOMING)){
                             if (inheritanceRel.getStartNode().equals(runInfoNode)){
-                                jg.writeStringField("Inheritance", getVariantInheritance(inheritanceRel.getType().name()));
+                                jg.writeStringField("inheritance", getVariantInheritance(inheritanceRel.getType().name()));
                             }
                         }
 
-                        jg.writeNumberField("Filter", 5);
+                        jg.writeNumberField("filter", 5);
 
                         passVariants++;
                         total++;
@@ -970,7 +971,7 @@ public class VariantDatabasePlugin
         jg.writeEndArray();
 
         //write filters
-        jg.writeFieldName("Filters");
+        jg.writeFieldName("filters");
         jg.writeStartArray();
 
         jg.writeStartObject();
@@ -1005,22 +1006,327 @@ public class VariantDatabasePlugin
 
         jg.writeEndArray();
 
-        jg.writeNumberField("Total", total);
+        jg.writeNumberField("total", total);
 
         jg.writeEndObject();
 
     }
 
-    //helper functions
+    /*user action*/
+    @POST
+    @Path("/addvirtualpanel")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response addVirtualPanel(final String json) {
+
+        try {
+
+            Date date = new Date();
+            HashMap<String, Object> properties = new HashMap<>();
+            Parameters parameters = objectMapper.readValue(json, Parameters.class);
+
+            try (Transaction tx = graphDb.beginTx()) {
+                Node userNode = graphDb.getNodeById(parameters.userNodeId);
+
+                if (userNode.hasLabel(VariantDatabase.getUserLabel())) {
+
+                    //make panel node
+                    properties.put("virtualPanelName", parameters.virtualPanelName);
+                    Node virtualPanelNode = Neo4j.addNode(graphDb, VariantDatabase.getVirtualPanelLabel(), properties);
+                    properties.clear();
+
+                    //link to user
+                    Relationship designedByRelationship = virtualPanelNode.createRelationshipTo(userNode, VariantDatabase.getDesignedByRelationship());
+                    designedByRelationship.setProperty("date", date.getTime());
+
+                    //link to genes
+                    for (String gene : parameters.virtualPanelList) {
+
+                        //match or create gene
+                        Node geneNode = Neo4j.matchOrCreateUniqueNode(graphDb, VariantDatabase.getSymbolLabel(), "symbolId", gene);
+
+                        //link to virtual panel
+                        virtualPanelNode.createRelationshipTo(geneNode, VariantDatabase.getContainsSymbolRelationship());
+                    }
+
+
+                }
+
+                tx.success();
+            }
+
+            return Response
+                    .status(Response.Status.OK)
+                    .build();
+
+        } catch (Exception e) {
+            return Response
+                    .status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        }
+
+    }
+
+    @POST
+    @Path("/updateuserpassword")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response updateUserPassword(final String json) {
+
+        try {
+
+            Parameters parameters = objectMapper.readValue(json, Parameters.class);
+
+            try (Transaction tx = graphDb.beginTx()) {
+                Node userNode = graphDb.getNodeById(parameters.userNodeId);
+                userNode.setProperty("password", parameters.password);
+                tx.success();
+            }
+
+            return Response.status(Response.Status.OK).build();
+
+        } catch (Exception e) {
+            return Response
+                    .status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        }
+    }
+
+    @POST
+    @Path("/createnewuser")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response createNewUser(final String json) {
+
+        try {
+
+            User user = objectMapper.readValue(json, User.class);
+            HashMap<String, Object> properties = new HashMap<>();
+
+            properties.put("fullName", user.fullName);
+            properties.put("password", user.password);
+            properties.put("jobTitle", user.jobTitle);
+            properties.put("userId", user.userId);
+            properties.put("contactNumber", user.contactNumber);
+            properties.put("admin", user.admin);
+
+            try (Transaction tx = graphDb.beginTx()) {
+                Neo4j.addNode(graphDb, VariantDatabase.getUserLabel(), properties);
+                tx.success();
+            }
+
+            return Response.status(Response.Status.OK).build();
+        } catch (Exception e) {
+            return Response
+                    .status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        }
+
+    }
+
+    @POST
+    @Path("/addvariantpathogenicity")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response addVariantPathogenicity(final String json) {
+
+        try {
+
+            Parameters parameters = objectMapper.readValue(json, Parameters.class);
+            Node variantNode, userNode;
+
+            try (Transaction tx = graphDb.beginTx()) {
+                variantNode = graphDb.getNodeById(parameters.variantNodeId);
+                userNode = graphDb.getNodeById(parameters.userNodeId);
+            }
+
+            //check no pending approvals
+            if (getVariantPathogenicityPendingApprovalStatus(variantNode) != null){
+                throw new IllegalArgumentException("Cannot modify classification while pending approval.");
+            }
+
+            //add user action
+            if (parameters.classification < 1 || parameters.classification > 5){
+                throw new IllegalArgumentException("Unknown classification");
+            }
+
+            HashMap<String, Object> properties = new HashMap<>();
+            properties.put("classification", parameters.classification);
+
+            UserAction.addUserAction(graphDb, variantNode, VariantDatabase.getHasPathogenicityRelationship(), Neo4j.addNode(graphDb, VariantDatabase.getVariantPathogenicityLabel(), properties), userNode, parameters.evidence);
+
+            return Response
+                    .status(Response.Status.OK)
+                    .build();
+
+        } catch (IllegalArgumentException e) {
+            return Response
+                    .status(Response.Status.BAD_REQUEST)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        } catch (Exception e) {
+            return Response
+                    .status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        }
+
+    }
+
+    @POST
+    @Path("/removevariantathogenicity")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response removeVariantPathogenicity(final String json) {
+
+        try {
+
+            Parameters parameters = objectMapper.readValue(json, Parameters.class);
+            Node variantNode, userNode, pathogenicityNode;
+
+            try (Transaction tx = graphDb.beginTx()) {
+                variantNode = graphDb.getNodeById(parameters.variantNodeId);
+                userNode = graphDb.getNodeById(parameters.userNodeId);
+                pathogenicityNode = graphDb.getNodeById(parameters.pathogenicityNodeId);
+            }
+
+            //check no pending approvals
+            if (getVariantPathogenicityPendingApprovalStatus(variantNode) != null){
+                throw new IllegalArgumentException("Cannot modify classification while pending approval.");
+            }
+
+            //request to remove action
+            UserAction.removeUserAction(graphDb, pathogenicityNode, userNode, parameters.evidence);
+
+            return Response
+                    .status(Response.Status.OK)
+                    .build();
+
+        } catch (IllegalArgumentException e) {
+            return Response
+                    .status(Response.Status.BAD_REQUEST)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        } catch (Exception e) {
+            return Response
+                    .status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        }
+
+    }
+
+    @POST
+    @Path("/authoriseuseraction")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response authoriseUserAction(final String json) {
+
+        try {
+
+            Parameters parameters = objectMapper.readValue(json, Parameters.class);
+            Node actionNode, userNode;
+
+            try (Transaction tx = graphDb.beginTx()) {
+                actionNode = graphDb.getNodeById(parameters.actionNodeId);
+                userNode = graphDb.getNodeById(parameters.userNodeId);
+            }
+
+            if (parameters.addorRemove){
+                UserAction.authUserAction(graphDb, actionNode, VariantDatabase.getAddAuthorisedByRelationship(), userNode);
+            } else {
+                UserAction.authUserAction(graphDb, actionNode, VariantDatabase.getRemoveAuthorisedByRelationship(), userNode);
+            }
+
+            return Response
+                    .status(Response.Status.OK)
+                    .build();
+
+        } catch (Exception e) {
+            return Response
+                    .status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        }
+
+    }
+
+    @GET
+    @Path("/getpathogenicityforauthorisation")
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response getPathogenicityForAuthorisation() {
+
+        try {
+
+            StreamingOutput stream = new StreamingOutput() {
+
+                @Override
+                public void write(OutputStream os) throws IOException, WebApplicationException {
+
+                    JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
+
+                    jg.writeStartArray();
+
+                    try (Transaction tx = graphDb.beginTx()) {
+                        try (ResourceIterator<Node> variantNodeIterator = graphDb.findNodes(VariantDatabase.getVariantLabel())){
+
+                            while (variantNodeIterator.hasNext()) {
+                                Node variantNode = variantNodeIterator.next();
+
+                                for (Relationship hasPathogenicityRelationship : variantNode.getRelationships(Direction.OUTGOING, VariantDatabase.getHasPathogenicityRelationship())) {
+
+                                    Node pathogenicityNode = hasPathogenicityRelationship.getEndNode();
+                                    UserAction.UserActionStatus status = UserAction.getUserActionStatus(graphDb, pathogenicityNode);
+
+                                    //check no pending approvals
+                                    if (status.equals(UserAction.UserActionStatus.PENDING_APPROVAL) || status.equals(UserAction.UserActionStatus.PENDING_RETIRE)) {
+
+                                        writeVariantInformation(variantNode, jg);
+                                        writeActionHistory(pathogenicityNode, jg);
+                                        jg.writeNumberField("classification", (Integer) pathogenicityNode.getProperty("classification"));
+
+                                    }
+
+                                }
+
+                            }
+
+                        }
+                    }
+
+                    jg.writeEndArray();
+
+                    jg.flush();
+                    jg.close();
+
+                }
+
+            };
+
+            return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+
+        } catch (Exception e) {
+            return Response
+                    .status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        }
+
+    }
+
+    /*helper functions*/
     private int getGlobalVariantOccurrence(Node variantNode){
 
         int seen = 0;
 
         try (Transaction tx = graphDb.beginTx()) {
             for (Relationship relationship : variantNode.getRelationships(Direction.INCOMING)) {
-                if (relationship.isType(Neo4j.getHasHetVariantRelationship()) && relationship.getStartNode().hasLabel(Neo4j.getRunInfoLabel())) {
+                if (relationship.isType(VariantDatabase.getHasHetVariantRelationship()) && relationship.getStartNode().hasLabel(VariantDatabase.getRunInfoLabel())) {
                     seen += 1;
-                } else if (relationship.isType(Neo4j.getHasHomVariantRelationship()) && relationship.getStartNode().hasLabel(Neo4j.getRunInfoLabel())) {
+                } else if (relationship.isType(VariantDatabase.getHasHomVariantRelationship()) && relationship.getStartNode().hasLabel(VariantDatabase.getRunInfoLabel())) {
                     seen += 2;
                 }
             }
@@ -1037,23 +1343,23 @@ public class VariantDatabasePlugin
         try (Transaction tx = graphDb.beginTx()) {
             for (Relationship relationship : variantNode.getRelationships(Direction.INCOMING)) {
 
-                if (relationship.isType(Neo4j.getHasHetVariantRelationship())) {
+                if (relationship.isType(VariantDatabase.getHasHetVariantRelationship())) {
                     Node runInfoNode = relationship.getStartNode();
 
-                    if (runInfoNode.hasLabel(Neo4j.getRunInfoLabel())) {
-                        if (runInfoNode.hasProperty("Assay")) {
-                            if (runInfoNode.getProperty("Assay").toString().equals(assay)) {
+                    if (runInfoNode.hasLabel(VariantDatabase.getRunInfoLabel())) {
+                        if (runInfoNode.hasProperty("assay")) {
+                            if (runInfoNode.getProperty("assay").toString().equals(assay)) {
                                 seen += 1;
                             }
                         }
                     }
 
-                } else if (relationship.isType(Neo4j.getHasHomVariantRelationship())) {
+                } else if (relationship.isType(VariantDatabase.getHasHomVariantRelationship())) {
                     Node runInfoNode = relationship.getStartNode();
 
-                    if (runInfoNode.hasLabel(Neo4j.getRunInfoLabel())){
-                        if (runInfoNode.hasProperty("Assay")){
-                            if (runInfoNode.getProperty("Assay").toString().equals(assay)){
+                    if (runInfoNode.hasLabel(VariantDatabase.getRunInfoLabel())){
+                        if (runInfoNode.hasProperty("assay")){
+                            if (runInfoNode.getProperty("assay").toString().equals(assay)){
                                 seen += 2;
                             }
                         }
@@ -1070,13 +1376,13 @@ public class VariantDatabasePlugin
         int tested = 0;
 
         try (Transaction tx = graphDb.beginTx()) {
-            try (ResourceIterator<Node> runInfoNodes = graphDb.findNodes(Neo4j.getRunInfoLabel())) {
+            try (ResourceIterator<Node> runInfoNodes = graphDb.findNodes(VariantDatabase.getRunInfoLabel())) {
 
                 while (runInfoNodes.hasNext()) {
                     Node runInfoNode = runInfoNodes.next();
 
-                    if (runInfoNode.hasProperty("Assay")){
-                        if (runInfoNode.getProperty("Assay").toString().equals(assay)){
+                    if (runInfoNode.hasProperty("assay")){
+                        if (runInfoNode.getProperty("assay").toString().equals(assay)){
                             tested++;
                         }
                     }
@@ -1094,18 +1400,12 @@ public class VariantDatabasePlugin
         //filter variants
         try (Transaction tx = graphDb.beginTx()) {
 
-            for (Neo4j.onekGPopulation population : Neo4j.onekGPopulation.values()) {
+            for (VariantDatabase.kGPhase3Population population : VariantDatabase.kGPhase3Population.values()) {
 
-                try {
-
-                    Object frequency = variantNode.getProperty(population.toString());
-
-                    if ((float) frequency > maxAlleleFrequency){
+                if (variantNode.hasProperty(population.toString())){
+                    if ((float) variantNode.getProperty(population.toString()) > maxAlleleFrequency){
                         return false;
                     }
-
-                } catch (NotFoundException e) {
-
                 }
 
             }
@@ -1119,18 +1419,12 @@ public class VariantDatabasePlugin
         //filter variants
         try (Transaction tx = graphDb.beginTx()) {
 
-            for (Neo4j.exACPopulation population : Neo4j.exACPopulation.values()) {
+            for (VariantDatabase.exacPopulation population : VariantDatabase.exacPopulation.values()) {
 
-                try {
-
-                    Object frequency = variantNode.getProperty(population.toString());
-
-                    if ((float) frequency > maxAlleleFrequency){
+                if (variantNode.hasProperty(population.toString())){
+                    if ((float) variantNode.getProperty(population.toString()) > maxAlleleFrequency){
                         return false;
                     }
-
-                } catch (NotFoundException e) {
-
                 }
 
             }
@@ -1138,49 +1432,6 @@ public class VariantDatabasePlugin
         }
 
         return true;
-    }
-    private int getVariantPathogenicityClassification(Node variantNode){
-        int classification = -1;
-
-        try (Transaction tx = graphDb.beginTx()) {
-
-            for (Relationship pathogenicityRelationship : variantNode.getRelationships(Direction.OUTGOING, Neo4j.getHasPathogenicityRelationship())) {
-                Node pathogenicityNode = pathogenicityRelationship.getEndNode();
-
-                if (pathogenicityNode.hasLabel(Neo4j.getPathogenicityLabel())) {
-
-                    Relationship addedByRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getAddedByRelationship(), Direction.OUTGOING);
-                    Relationship addAuthorisedByRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getAddAuthorisedByRelationship(), Direction.OUTGOING);
-                    Relationship removeAuthorisedByRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getRemoveAuthorisedByRelationship(), Direction.OUTGOING);
-
-                    if (addAuthorisedByRelationship != null) {
-                        Node userNode = addAuthorisedByRelationship.getEndNode();
-
-                        if (userNode.hasLabel(Neo4j.getUserLabel())) {
-                            if (addedByRelationship.hasProperty("Classification")){
-                                classification = (int) addedByRelationship.getProperty("Classification");
-                            }
-                        }
-                    }
-
-                    if (removeAuthorisedByRelationship != null) {
-                        Node userNode = removeAuthorisedByRelationship.getEndNode();
-
-                        if (userNode.hasLabel(Neo4j.getUserLabel())) {
-                            classification = -1;
-                        }
-
-                    } else {
-                        return classification;
-                    }
-
-                }
-
-            }
-
-        }
-
-        return classification;
     }
     private String getVariantInheritance(String inheritanceRelationshipTypeName){
         if (inheritanceRelationshipTypeName.length() > 12) {
@@ -1197,14 +1448,14 @@ public class VariantDatabasePlugin
         try (Transaction tx = graphDb.beginTx()) {
 
             //check variant belongs to virtual panel
-            if (variantNode.hasLabel(Neo4j.getVariantLabel())) {
+            if (variantNode.hasLabel(VariantDatabase.getVariantLabel())) {
 
-                for (Relationship inSymbolRel : variantNode.getRelationships(Direction.OUTGOING, Neo4j.getHasInSymbolRelationship())) {
+                for (Relationship inSymbolRel : variantNode.getRelationships(Direction.OUTGOING, VariantDatabase.getInSymbolRelationship())) {
                     Node symbolNode = inSymbolRel.getEndNode();
 
-                    if (symbolNode.hasLabel(Neo4j.getSymbolLabel())) {
+                    if (symbolNode.hasLabel(VariantDatabase.getSymbolLabel())) {
 
-                        for (Relationship containsSymbol : symbolNode.getRelationships(Direction.INCOMING, Neo4j.getHasContainsSymbol())) {
+                        for (Relationship containsSymbol : symbolNode.getRelationships(Direction.INCOMING, VariantDatabase.getContainsSymbolRelationship())) {
                             Node virtualPanelNode = containsSymbol.getStartNode();
 
                             //check if variant belongs to the virtual panel
@@ -1238,68 +1489,94 @@ public class VariantDatabasePlugin
 
         return false;
     }
+    private UserAction.UserActionStatus getVariantPathogenicityPendingApprovalStatus(Node variantNode){
 
-    //write functions
-    private void writeUserInformation(Node userNode, JsonGenerator jg) throws IOException {
         try (Transaction tx = graphDb.beginTx()) {
 
-            jg.writeNumberField("UserNodeId", userNode.getId());
+            for (Relationship relationship : variantNode.getRelationships(Direction.OUTGOING, VariantDatabase.getHasPathogenicityRelationship())) {
 
-            if (userNode.hasProperty("UserId")) jg.writeStringField("UserId", userNode.getProperty("UserId").toString());
-            if (userNode.hasProperty("Password")) jg.writeStringField("Password", userNode.getProperty("Password").toString());
-            if (userNode.hasProperty("Admin")) jg.writeBooleanField("Admin", (boolean) userNode.getProperty("Admin"));
-            if (userNode.hasProperty("FullName")) jg.writeStringField("FullName", userNode.getProperty("FullName").toString());
-            if (userNode.hasProperty("JobTitle")) jg.writeStringField("JobTitle", userNode.getProperty("JobTitle").toString());
-            if (userNode.hasProperty("EmailAddress")) jg.writeStringField("EmailAddress", userNode.getProperty("EmailAddress").toString());
-            if (userNode.hasProperty("ContactNumber")) jg.writeStringField("ContactNumber", userNode.getProperty("ContactNumber").toString());
+                Node pathogenicityNode = relationship.getEndNode();
+                UserAction.UserActionStatus status = UserAction.getUserActionStatus(graphDb, pathogenicityNode);
+
+                //check no pending approvals
+                if (status.equals(UserAction.UserActionStatus.PENDING_APPROVAL) || status.equals(UserAction.UserActionStatus.PENDING_RETIRE)) {
+                    return status;
+                }
+
+            }
+
+        }
+
+        return null;
+    }
+
+    /*write functions*/
+    private void writeFullUserInformation(Node userNode, JsonGenerator jg) throws IOException {
+        try (Transaction tx = graphDb.beginTx()) {
+
+            jg.writeNumberField("userNodeId", userNode.getId());
+
+            if (userNode.hasProperty("userId")) jg.writeStringField("userId", userNode.getProperty("userId").toString());
+            if (userNode.hasProperty("password")) jg.writeStringField("password", userNode.getProperty("password").toString());
+            if (userNode.hasProperty("admin")) jg.writeBooleanField("admin", (boolean) userNode.getProperty("admin"));
+            if (userNode.hasProperty("fullName")) jg.writeStringField("fullName", userNode.getProperty("fullName").toString());
+            if (userNode.hasProperty("jobTitle")) jg.writeStringField("jobTitle", userNode.getProperty("jobTitle").toString());
+            if (userNode.hasProperty("emailAddress")) jg.writeStringField("emailAddress", userNode.getProperty("emailAddress").toString());
+            if (userNode.hasProperty("contactNumber")) jg.writeStringField("contactNumber", userNode.getProperty("contactNumber").toString());
+
+        }
+    }
+    private void writeLiteUserInformation(Node userNode, JsonGenerator jg) throws IOException {
+        try (Transaction tx = graphDb.beginTx()) {
+
+            jg.writeNumberField("userNodeId", userNode.getId());
+            if (userNode.hasProperty("admin")) jg.writeBooleanField("admin", (boolean) userNode.getProperty("admin"));
+            if (userNode.hasProperty("fullName")) jg.writeStringField("fullName", userNode.getProperty("fullName").toString());
 
         }
     }
     private void writeSampleInformation(Node sampleNode, JsonGenerator jg) throws IOException {
         try (Transaction tx = graphDb.beginTx()) {
-
-            jg.writeNumberField("SampleNodeId", sampleNode.getId());
-
-            jg.writeStringField("SampleId", sampleNode.getProperty("SampleId").toString());
-
+            jg.writeNumberField("sampleNodeId", sampleNode.getId());
+            jg.writeStringField("sampleId", sampleNode.getProperty("sampleId").toString());
         }
     }
     private void writeRunInformation(Node runInfoNode, JsonGenerator jg) throws IOException {
         try (Transaction tx = graphDb.beginTx()) {
 
-            jg.writeNumberField("RunInfoNodeId", runInfoNode.getId());
+            jg.writeNumberField("runInfoNodeId", runInfoNode.getId());
 
-            if (runInfoNode.hasProperty("WorklistId"))
-                jg.writeStringField("WorklistId", runInfoNode.getProperty("WorklistId").toString());
-            if (runInfoNode.hasProperty("SeqId"))
-                jg.writeStringField("SeqId", runInfoNode.getProperty("SeqId").toString());
-            if (runInfoNode.hasProperty("Assay"))
-                jg.writeStringField("Assay", runInfoNode.getProperty("Assay").toString());
-            if (runInfoNode.hasProperty("PipelineName"))
-                jg.writeStringField("PipelineName", runInfoNode.getProperty("PipelineName").toString());
-            if (runInfoNode.hasProperty("PipelineVersion"))
-                jg.writeNumberField("PipelineVersion", (int) runInfoNode.getProperty("PipelineVersion"));
-            if (runInfoNode.hasProperty("RemoteVcfFilePath"))
-                jg.writeStringField("RemoteVcfFilePath", runInfoNode.getProperty("RemoteVcfFilePath").toString());
-            if (runInfoNode.hasProperty("RemoteBamFilePath"))
-                jg.writeStringField("RemoteBamFilePath", runInfoNode.getProperty("RemoteBamFilePath").toString());
+            if (runInfoNode.hasProperty("worklistId"))
+                jg.writeStringField("worklistId", runInfoNode.getProperty("worklistId").toString());
+            if (runInfoNode.hasProperty("seqId"))
+                jg.writeStringField("seqId", runInfoNode.getProperty("seqId").toString());
+            if (runInfoNode.hasProperty("assay"))
+                jg.writeStringField("assay", runInfoNode.getProperty("assay").toString());
+            if (runInfoNode.hasProperty("pipelineName"))
+                jg.writeStringField("pipelineName", runInfoNode.getProperty("pipelineName").toString());
+            if (runInfoNode.hasProperty("pipelineVersion"))
+                jg.writeNumberField("pipelineVersion", (int) runInfoNode.getProperty("pipelineVersion"));
+            if (runInfoNode.hasProperty("remoteVcfFilePath"))
+                jg.writeStringField("remoteVcfFilePath", runInfoNode.getProperty("remoteVcfFilePath").toString());
+            if (runInfoNode.hasProperty("remoteBamFilePath"))
+                jg.writeStringField("remoteBamFilePath", runInfoNode.getProperty("remoteBamFilePath").toString());
 
         }
     }
     private void writeVirtualPanelInformation(Node virtualPanelNode, JsonGenerator jg) throws IOException {
         try (Transaction tx = graphDb.beginTx()) {
 
-            Relationship designedByRelationship = virtualPanelNode.getSingleRelationship(Neo4j.getHasDesignedBy(), Direction.OUTGOING);
+            Relationship designedByRelationship = virtualPanelNode.getSingleRelationship(VariantDatabase.getDesignedByRelationship(), Direction.OUTGOING);
             Node userNode = designedByRelationship.getEndNode();
 
-            jg.writeNumberField("PanelNodeId", virtualPanelNode.getId());
+            jg.writeNumberField("panelNodeId", virtualPanelNode.getId());
 
-            if (virtualPanelNode.hasProperty("VirtualPanelName"))
-                jg.writeStringField("VirtualPanelName", virtualPanelNode.getProperty("VirtualPanelName").toString());
-            if (designedByRelationship.hasProperty("Date"))
-                jg.writeNumberField("Date", (long) designedByRelationship.getProperty("Date"));
-            if (userNode.hasLabel(Neo4j.getUserLabel()) && userNode.hasProperty("FullName"))
-                jg.writeStringField("FullName", userNode.getProperty("FullName").toString());
+            if (virtualPanelNode.hasProperty("virtualPanelName"))
+                jg.writeStringField("virtualPanelName", virtualPanelNode.getProperty("virtualPanelName").toString());
+            if (designedByRelationship.hasProperty("date"))
+                jg.writeNumberField("date", (long) designedByRelationship.getProperty("date"));
+            if (userNode.hasLabel(VariantDatabase.getUserLabel()) && userNode.hasProperty("fullName"))
+                jg.writeStringField("fullName", userNode.getProperty("fullName").toString());
 
         }
 
@@ -1307,10 +1584,10 @@ public class VariantDatabasePlugin
     private void writeSymbolInformation(Node symbolNode, JsonGenerator jg) throws IOException {
         try (Transaction tx = graphDb.beginTx()) {
 
-            jg.writeNumberField("SymbolNodeId", symbolNode.getId());
+            jg.writeNumberField("symbolNodeId", symbolNode.getId());
 
-            if (symbolNode.hasProperty("SymbolId")) {
-                jg.writeStringField("SymbolId", symbolNode.getProperty("SymbolId").toString());
+            if (symbolNode.hasProperty("symbolId")) {
+                jg.writeStringField("symbolId", symbolNode.getProperty("symbolId").toString());
             }
 
         }
@@ -1318,27 +1595,27 @@ public class VariantDatabasePlugin
     private void writeFeatureInformation(Node featureNode, JsonGenerator jg) throws IOException {
         try (Transaction tx = graphDb.beginTx()) {
 
-            jg.writeNumberField("FeatureNodeId", featureNode.getId());
+            jg.writeNumberField("featureNodeId", featureNode.getId());
 
-            if (featureNode.hasProperty("FeatureId"))
-                jg.writeStringField("FeatureId", featureNode.getProperty("FeatureId").toString());
-            if (featureNode.hasProperty("Strand")) {
-                if ((boolean) featureNode.getProperty("Strand")) {
-                    jg.writeStringField("Strand", "+");
+            if (featureNode.hasProperty("featureId"))
+                jg.writeStringField("featureId", featureNode.getProperty("featureId").toString());
+            if (featureNode.hasProperty("strand")) {
+                if ((boolean) featureNode.getProperty("strand")) {
+                    jg.writeStringField("strand", "+");
                 } else {
-                    jg.writeStringField("Strand", "-");
+                    jg.writeStringField("strand", "-");
                 }
             }
-            if (featureNode.hasProperty("CCDSId"))
-                jg.writeStringField("CCDSId", featureNode.getProperty("CCDSId").toString());
-            if (featureNode.hasProperty("FeatureType"))
-                jg.writeStringField("FeatureType", featureNode.getProperty("FeatureType").toString());
-            if (featureNode.hasProperty("TotalExons"))
-                jg.writeNumberField("TotalExons", (short) featureNode.getProperty("TotalExons"));
-            if (featureNode.hasLabel(Neo4j.getCanonicalLabel())) {
-                jg.writeBooleanField("Canonical", true);
+            if (featureNode.hasProperty("ccdsId"))
+                jg.writeStringField("ccdsId", featureNode.getProperty("ccdsId").toString());
+            if (featureNode.hasProperty("featureType"))
+                jg.writeStringField("featureType", featureNode.getProperty("featureType").toString());
+            if (featureNode.hasProperty("totalExons"))
+                jg.writeNumberField("totalExons", (short) featureNode.getProperty("totalExons"));
+            if (featureNode.hasLabel(VariantDatabase.getCanonicalLabel())) {
+                jg.writeBooleanField("canonical", true);
             } else {
-                jg.writeBooleanField("Canonical", false);
+                jg.writeBooleanField("canonical", false);
             }
 
         }
@@ -1346,17 +1623,17 @@ public class VariantDatabasePlugin
     private void writeVariantInformation(Node variantNode, JsonGenerator jg) throws IOException {
         try (Transaction tx = graphDb.beginTx()) {
 
-            jg.writeNumberField("VariantNodeId", variantNode.getId());
-            jg.writeNumberField("Occurrence", getGlobalVariantOccurrence(variantNode));
+            jg.writeNumberField("variantNodeId", variantNode.getId());
+            jg.writeNumberField("occurrence", getGlobalVariantOccurrence(variantNode));
 
-            if (variantNode.hasProperty("VariantId")) {
-                jg.writeStringField("VariantId", variantNode.getProperty("VariantId").toString());
+            if (variantNode.hasProperty("variantId")) {
+                jg.writeStringField("variantId", variantNode.getProperty("variantId").toString());
             }
-            if (variantNode.hasProperty("dbSNPId")){
-                jg.writeStringField("dbSNPId", variantNode.getProperty("dbSNPId").toString());
+            if (variantNode.hasProperty("dbSnpId")){
+                jg.writeStringField("dbSnpId", variantNode.getProperty("dbSnpId").toString());
             }
-            if (variantNode.hasProperty("GERP")) {
-                jg.writeNumberField("GERP", (float) variantNode.getProperty("GERP"));
+            if (variantNode.hasProperty("gerp")) {
+                jg.writeNumberField("gerp", (float) variantNode.getProperty("gerp"));
             }
             if (variantNode.hasProperty("phyloP")) {
                 jg.writeNumberField("phyloP", (float) variantNode.getProperty("phyloP"));
@@ -1364,12 +1641,12 @@ public class VariantDatabasePlugin
             if (variantNode.hasProperty("phastCons")) {
                 jg.writeNumberField("phastCons", (float) variantNode.getProperty("phastCons"));
             }
-            for (Neo4j.onekGPopulation population : Neo4j.onekGPopulation.values()) {
+            for (VariantDatabase.kGPhase3Population population : VariantDatabase.kGPhase3Population.values()) {
                 if (variantNode.hasProperty(population.toString())){
                     jg.writeNumberField(population.toString(), (double) Math.round( ((float) variantNode.getProperty(population.toString()) * 100) * 100d) / 100d);
                 }
             }
-            for (Neo4j.exACPopulation population : Neo4j.exACPopulation.values()) {
+            for (VariantDatabase.exacPopulation population : VariantDatabase.exacPopulation.values()) {
                 if (variantNode.hasProperty(population.toString())){
                     jg.writeNumberField(population.toString(), (double) Math.round( ((float) variantNode.getProperty(population.toString()) * 100) * 100d) / 100d);
                 }
@@ -1379,27 +1656,27 @@ public class VariantDatabasePlugin
     }
     private void writeFunctionalAnnotation(Node annotationNode, Relationship consequenceRel, Relationship biotypeRel, JsonGenerator jg) throws IOException {
 
-        String[] domainSources = {"Pfam_domain", "hmmpanther", "prosite", "Superfamily_domains"};
+        String[] domainSources = {"pfamDomain", "hmmpanther", "prosite", "superfamilyDomains"};
 
         try (Transaction tx = graphDb.beginTx()) {
 
-            jg.writeNumberField("AnnotationNodeId", annotationNode.getId());
+            jg.writeNumberField("annotationNodeId", annotationNode.getId());
 
-            if (annotationNode.hasProperty("HGVSc"))
-                jg.writeStringField("HGVSc", annotationNode.getProperty("HGVSc").toString());
-            if (annotationNode.hasProperty("HGVSp"))
-                jg.writeStringField("HGVSp", annotationNode.getProperty("HGVSp").toString());
-            if (annotationNode.hasProperty("Exon")) {
-                jg.writeStringField("Location", annotationNode.getProperty("Exon").toString());
-            } else if (annotationNode.hasProperty("Intron")) {
-                jg.writeStringField("Location", annotationNode.getProperty("Intron").toString());
+            if (annotationNode.hasProperty("hgvsc"))
+                jg.writeStringField("hgvsc", annotationNode.getProperty("hgvsc").toString());
+            if (annotationNode.hasProperty("hgvsp"))
+                jg.writeStringField("hgvsp", annotationNode.getProperty("hgvsp").toString());
+            if (annotationNode.hasProperty("exon")) {
+                jg.writeStringField("location", annotationNode.getProperty("exon").toString());
+            } else if (annotationNode.hasProperty("intron")) {
+                jg.writeStringField("location", annotationNode.getProperty("intron").toString());
             }
-            if (annotationNode.hasProperty("Sift"))
-                jg.writeStringField("Sift", annotationNode.getProperty("Sift").toString());
-            if (annotationNode.hasProperty("Polyphen"))
-                jg.writeStringField("Polyphen", annotationNode.getProperty("Polyphen").toString());
-            if (annotationNode.hasProperty("Codons"))
-                jg.writeStringField("Codons", annotationNode.getProperty("Codons").toString());
+            if (annotationNode.hasProperty("sift"))
+                jg.writeStringField("sift", annotationNode.getProperty("sift").toString());
+            if (annotationNode.hasProperty("polyphen"))
+                jg.writeStringField("polyphen", annotationNode.getProperty("polyphen").toString());
+            if (annotationNode.hasProperty("codons"))
+                jg.writeStringField("codons", annotationNode.getProperty("codons").toString());
 
             //domains
             for (String source : domainSources){
@@ -1421,407 +1698,93 @@ public class VariantDatabasePlugin
             //consequence
             String consequence = consequenceRel.getType().name();
             if (consequence.length() > 16) {
-                jg.writeStringField("Consequence", consequence.substring(4, consequence.length() - 12));
+                jg.writeStringField("consequence", consequence.substring(4, consequence.length() - 12));
             }
 
             //biotype
             String biotype = biotypeRel.getType().name();
-            if (biotype.length() > 12) jg.writeStringField("Biotype", biotype.substring(4, biotype.length() - 8));
+            if (biotype.length() > 12) jg.writeStringField("biotype", biotype.substring(4, biotype.length() - 8));
 
         }
 
     }
+    private void writeActionHistory(Node actionNode, JsonGenerator jg) throws IOException {
 
-    //todo
-    private boolean isClassificationPendingApproval(Node variantNode){
+        Node user;
+
+        jg.writeStartObject();
 
         try (Transaction tx = graphDb.beginTx()) {
 
-            for (Relationship pathogenicityRel : variantNode.getRelationships(Direction.OUTGOING, Neo4j.getHasPathogenicityRelationship())) {
-                Node pathogenicityNode = pathogenicityRel.getEndNode();
+            Relationship addedByRelationship = actionNode.getSingleRelationship(VariantDatabase.getAddedByRelationship(), Direction.OUTGOING);
+            Relationship addAuthorisedByRelationship = actionNode.getSingleRelationship(VariantDatabase.getAddAuthorisedByRelationship(), Direction.OUTGOING);
+            Relationship removedByRelationship = actionNode.getSingleRelationship(VariantDatabase.getRemovedByRelationship(), Direction.OUTGOING);
+            Relationship removeAuthorisedByRelationship = actionNode.getSingleRelationship(VariantDatabase.getRemoveAuthorisedByRelationship(), Direction.OUTGOING);
 
-                if (pathogenicityNode.hasLabel(Neo4j.getPathogenicityLabel())){
+            if (addedByRelationship != null){
 
-                    Relationship addedByRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getAddedByRelationship(), Direction.OUTGOING);
-                    Relationship addAuthorisedByRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getAddAuthorisedByRelationship(), Direction.OUTGOING);
-                    Relationship removedByRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getRemovedByRelationship(), Direction.OUTGOING);
-                    Relationship removeAuthorisedByRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getRemoveAuthorisedByRelationship(), Direction.OUTGOING);
+                jg.writeObjectFieldStart("added");
 
-                    if (addedByRelationship != null && addAuthorisedByRelationship == null){
-                        return true;
-                    } else if (removedByRelationship != null && removeAuthorisedByRelationship == null){
-                        return true;
-                    }
+                user = addedByRelationship.getEndNode();
+                writeLiteUserInformation(user, jg);
 
+                if (addedByRelationship.hasProperty("date")) {
+                    jg.writeNumberField("date", (long) addedByRelationship.getProperty("date"));
                 }
+                if (addedByRelationship.hasProperty("evidence")) {
+                    jg.writeStringField("evidence", addedByRelationship.getProperty("evidence").toString());
+                }
+
+                jg.writeEndObject();
 
             }
 
-        }
+            if (addAuthorisedByRelationship != null){
+                jg.writeObjectFieldStart("addedAuth");
 
-        return false;
-    }
-    private void writeFeatureHistory(Node featureNode, JsonGenerator jg) throws IOException {
-        try (Transaction tx = graphDb.beginTx()) {
+                user = addAuthorisedByRelationship.getEndNode();
+                writeLiteUserInformation(user, jg);
 
-            jg.writeArrayFieldStart("History");
-
-            //loop over feature preferences
-            for (Relationship featurePreferenceRelationship : featureNode.getRelationships(Direction.OUTGOING, Neo4j.getHasFeaturePreferenceRelationship())) {
-                Node featurePreferenceNode = featurePreferenceRelationship.getEndNode();
-
-                if (featurePreferenceNode.hasLabel(Neo4j.getFeaturePreferenceLabel())) {
-
-                    jg.writeStartObject();
-
-                    //get user activity
-                    Relationship addedByRelationship = featurePreferenceNode.getSingleRelationship(Neo4j.getAddedByRelationship(), Direction.OUTGOING);
-                    Relationship removedByRelationship = featurePreferenceNode.getSingleRelationship(Neo4j.getRemovedByRelationship(), Direction.OUTGOING);
-                    Relationship addAuthorisedByRelationship = featurePreferenceNode.getSingleRelationship(Neo4j.getAddAuthorisedByRelationship(), Direction.OUTGOING);
-                    Relationship removeAuthorisedByRelationship = featurePreferenceNode.getSingleRelationship(Neo4j.getRemoveAuthorisedByRelationship(), Direction.OUTGOING);
-
-                    if (addedByRelationship != null) {
-                        Node userNode = addedByRelationship.getEndNode();
-
-                        if (userNode.hasLabel(Neo4j.getUserLabel())) {
-                            if (addedByRelationship.hasProperty("Evidence"))
-                                jg.writeStringField("AddEvidence", addedByRelationship.getProperty("Evidence").toString());
-                            if (addedByRelationship.hasProperty("Date"))
-                                jg.writeNumberField("AddedDate", (long) addedByRelationship.getProperty("Date"));
-                            if (userNode.hasProperty("UserId"))
-                                jg.writeStringField("AddedByUserId", userNode.getProperty("UserId").toString());
-                        }
-
-                    }
-
-                    if (addAuthorisedByRelationship != null) {
-                        Node userNode = addAuthorisedByRelationship.getEndNode();
-
-                        if (userNode.hasLabel(Neo4j.getUserLabel())) {
-                            if (userNode.hasProperty("UserId"))
-                                jg.writeStringField("AddAuthorisedByUserId", userNode.getProperty("UserId").toString());
-                            if (addAuthorisedByRelationship.hasProperty("Date"))
-                                jg.writeNumberField("AddAuthorisedDate", (long) addAuthorisedByRelationship.getProperty("Date"));
-                        }
-
-                    }
-
-                    if (removedByRelationship != null) {
-                        Node userNode = removedByRelationship.getEndNode();
-
-                        if (userNode.hasLabel(Neo4j.getUserLabel())) {
-                            if (removedByRelationship.hasProperty("Evidence"))
-                                jg.writeStringField("RemovedEvidence", removedByRelationship.getProperty("Evidence").toString());
-                            if (removedByRelationship.hasProperty("Date"))
-                                jg.writeNumberField("RemovedDate", (long) removedByRelationship.getProperty("Date"));
-                            if (userNode.hasProperty("UserId"))
-                                jg.writeStringField("RemovedByUserId", userNode.getProperty("UserId").toString());
-                        }
-
-                    }
-
-                    if (removeAuthorisedByRelationship != null) {
-                        Node userNode = removeAuthorisedByRelationship.getEndNode();
-
-                        if (userNode.hasLabel(Neo4j.getUserLabel())) {
-                            if (userNode.hasProperty("UserId"))
-                                jg.writeStringField("RemoveAuthorisedByUserId", userNode.getProperty("UserId").toString());
-                            if (removeAuthorisedByRelationship.hasProperty("Date"))
-                                jg.writeNumberField("RemoveAuthorisedDate", (long) removeAuthorisedByRelationship.getProperty("Date"));
-                        }
-
-                    }
-
-                    jg.writeEndObject();
-                }
-
-            }
-
-            jg.writeEndArray();
-
-        }
-    }
-    private void writeVariantHistory(Node variantNode, JsonGenerator jg) throws IOException {
-        jg.writeArrayFieldStart("History");
-
-        /*for (Relationship pathogenicityRelationship : variantNode.getRelationships(Direction.OUTGOING, Neo4j.getHasPathogenicityRelationship())) {
-            Node pathogenicityNode = pathogenicityRelationship.getEndNode();
-
-            if (pathogenicityNode.hasLabel(Neo4j.getPathogenicityLabel())) {
-                jg.writeStartObject();
-
-                jg.writeNumberField("PathogenicityNodeId", pathogenicityNode.getId());
-
-                Relationship addedByRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getAddedByRelationship(), Direction.OUTGOING);
-                Relationship removedByRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getRemovedByRelationship(), Direction.OUTGOING);
-                Relationship addAuthorisedByRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getAddAuthorisedByRelationship(), Direction.OUTGOING);
-                Relationship removeAuthorisedByRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getRemoveAuthorisedByRelationship(), Direction.OUTGOING);
-
-                if (addedByRelationship != null){
-                    Node userNode = addedByRelationship.getEndNode();
-
-                    if (userNode.hasLabel(Neo4j.getUserLabel())){
-                        if (userNode.hasProperty("UserId")) jg.writeStringField("AddedByUserId", userNode.getProperty("UserId").toString());
-                        if (addedByRelationship.hasProperty("Date")) jg.writeNumberField("AddedDate", (long) addedByRelationship.getProperty("Date"));
-
-                        if (addedByRelationship.hasProperty("Evidence")) jg.writeStringField("AddEvidence", addedByRelationship.getProperty("Evidence").toString());
-                        if (addedByRelationship.hasProperty("Classification")) jg.writeNumberField("Classification", (int) addedByRelationship.getProperty("Classification"));
-                    }
-
-                }
-
-                if (addAuthorisedByRelationship != null){
-                    Node userNode = addAuthorisedByRelationship.getEndNode();
-
-                    if (userNode.hasLabel(Neo4j.getUserLabel())){
-                        if (userNode.hasProperty("UserId")) jg.writeStringField("AddAuthorisedByUserId", userNode.getProperty("UserId").toString());
-                        if (addAuthorisedByRelationship.hasProperty("Date")) jg.writeNumberField("AddAuthorisedDate", (long) addAuthorisedByRelationship.getProperty("Date"));
-                    }
-
-                }
-
-                if (removedByRelationship != null){
-                    Node userNode = removedByRelationship.getEndNode();
-
-                    if (userNode.hasLabel(Neo4j.getUserLabel())){
-                        if (userNode.hasProperty("UserId")) jg.writeStringField("RemovedByUserId", userNode.getProperty("UserId").toString());
-                        if (removedByRelationship.hasProperty("Date")) jg.writeNumberField("RemovedDate", (long) removedByRelationship.getProperty("Date"));
-
-                        if (removedByRelationship.hasProperty("Evidence")) jg.writeStringField("RemovedEvidence", removedByRelationship.getProperty("Evidence").toString());
-                    }
-
-                }
-
-                if (removeAuthorisedByRelationship != null){
-                    Node userNode = removeAuthorisedByRelationship.getEndNode();
-
-                    if (userNode.hasLabel(Neo4j.getUserLabel())){
-                        if (userNode.hasProperty("UserId")) jg.writeStringField("RemoveAuthorisedByUserId", userNode.getProperty("UserId").toString());
-                        if (removeAuthorisedByRelationship.hasProperty("Date")) jg.writeNumberField("RemoveAuthorisedDate", (long) removeAuthorisedByRelationship.getProperty("Date"));
-                    }
-
+                if (addAuthorisedByRelationship.hasProperty("date")) {
+                    jg.writeNumberField("date", (long) addAuthorisedByRelationship.getProperty("date"));
                 }
 
                 jg.writeEndObject();
             }
 
-        }*/
+            if (removedByRelationship != null){
+                jg.writeObjectFieldStart("removed");
 
-        jg.writeEndArray();
-    }
+                user = removedByRelationship.getEndNode();
+                writeLiteUserInformation(user, jg);
 
-    @POST
-    @Path("/addvariantpathogenicity")
-    @Consumes(MediaType.APPLICATION_JSON)
-    @Produces(MediaType.APPLICATION_JSON)
-    public Response addVariantPathogenicity(final String json) throws IOException {
-        Parameters parameters = objectMapper.readValue(json, Parameters.class);
-
-        try (Transaction tx = graphDb.beginTx()) {
-
-            Node variantNode = graphDb.getNodeById(parameters.VariantNodeId);
-            Node userNode = graphDb.getNodeById(parameters.UserNodeId);
-
-            if (variantNode.hasLabel(Neo4j.getVariantLabel()) && userNode.hasLabel(Neo4j.getUserLabel())){
-
-                if (isClassificationPendingApproval(variantNode)){
-                    throw new UnsupportedOperationException("Variant has pending classification.");
+                if (removedByRelationship.hasProperty("date")){
+                    jg.writeNumberField("date", (long) removedByRelationship.getProperty("date"));
+                }
+                if (removedByRelationship.hasProperty("evidence")){
+                    jg.writeStringField("evidence", removedByRelationship.getProperty("evidence").toString());
                 }
 
-                Date date = new Date();
-
-                //create pathogenicity
-                Node pathogenicityNode = graphDb.createNode(Neo4j.getPathogenicityLabel());
-                variantNode.createRelationshipTo(pathogenicityNode, Neo4j.getHasPathogenicityRelationship());
-
-                Relationship addedByRelationship = pathogenicityNode.createRelationshipTo(userNode, Neo4j.getAddedByRelationship());
-
-                //add properties
-                addedByRelationship.setProperty("Classification", parameters.Classification);
-                addedByRelationship.setProperty("Date", date.getTime());
-                if (parameters.Evidence != null) addedByRelationship.setProperty("Evidence", parameters.Evidence);
-
+                jg.writeEndObject();
             }
 
-            tx.success();
-        } catch (UnsupportedOperationException e){
-            return Response
-                    .status(Response.Status.BAD_REQUEST)
-                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
-                    .build();
+            if (removeAuthorisedByRelationship != null){
+                jg.writeObjectFieldStart("removedAuth");
+
+                user = removeAuthorisedByRelationship.getEndNode();
+                writeLiteUserInformation(user, jg);
+
+                if (removeAuthorisedByRelationship.hasProperty("date")){
+                    jg.writeNumberField("date", (long) removeAuthorisedByRelationship.getProperty("date"));
+                }
+
+                jg.writeEndObject();
+            }
+
         }
 
-        return Response
-                .status(Response.Status.OK)
-                .build();
-    }
+        jg.writeEndObject();
 
-    @POST
-    @Path("/removevariantpathogenicity")
-    @Consumes(MediaType.APPLICATION_JSON)
-    @Produces(MediaType.APPLICATION_JSON)
-    public Response removeVariantPathogenicity(final String json) throws IOException {
-
-        StreamingOutput stream = new StreamingOutput() {
-
-            @Override
-            public void write(OutputStream os) throws IOException, WebApplicationException {
-
-                Parameters parameters = objectMapper.readValue(json, Parameters.class);
-
-                try (Transaction tx = graphDb.beginTx()) {
-
-                    Node pathogenicityNode = graphDb.getNodeById(parameters.PathogenicityNodeId);
-                    Node userNode = graphDb.getNodeById(parameters.UserNodeId);
-
-                    if (pathogenicityNode.hasLabel(Neo4j.getPathogenicityLabel()) && userNode.hasLabel(Neo4j.getUserLabel())){
-
-                        Date date = new Date();
-
-                        //remove pathogenicity
-                        Relationship removedByRelationship = pathogenicityNode.createRelationshipTo(userNode, Neo4j.getRemovedByRelationship());
-
-                        //add properties
-                        removedByRelationship.setProperty("Date", date.getTime());
-                        if (parameters.Evidence != null) removedByRelationship.setProperty("Evidence", parameters.Evidence);
-
-                    }
-
-                    tx.success();
-                }
-
-            }
-
-        };
-
-        return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
-    }
-
-    @POST
-    @Path("/authorisevariantpathogenicity")
-    @Consumes(MediaType.APPLICATION_JSON)
-    @Produces(MediaType.APPLICATION_JSON)
-    public Response authoriseVariantPathogenicity(final String json) throws IOException {
-
-        StreamingOutput stream = new StreamingOutput() {
-
-            @Override
-            public void write(OutputStream os) throws IOException, WebApplicationException {
-
-                Parameters parameters = objectMapper.readValue(json, Parameters.class);
-
-                try (Transaction tx = graphDb.beginTx()) {
-
-                    Node pathogenicityNode = graphDb.getNodeById(parameters.PathogenicityNodeId);
-                    Node userNode = graphDb.getNodeById(parameters.UserNodeId);
-
-                    if (pathogenicityNode.hasLabel(Neo4j.getPathogenicityLabel()) && userNode.hasLabel(Neo4j.getUserLabel())){
-
-                        Date date = new Date();
-
-                        if (parameters.AddorRemove){
-                            Relationship relationship = pathogenicityNode.createRelationshipTo(userNode, Neo4j.getAddAuthorisedByRelationship());
-                            relationship.setProperty("Date", date.getTime());
-                        } else {
-                            Relationship relationship = pathogenicityNode.createRelationshipTo(userNode, Neo4j.getRemoveAuthorisedByRelationship());
-                            relationship.setProperty("Date", date.getTime());
-                        }
-
-                    }
-
-                    tx.success();
-                }
-
-            }
-
-        };
-
-        return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
-    }
-
-    @GET
-    @Path("/getnewpathogenicitiesforauthorisation")
-    @Produces(MediaType.APPLICATION_JSON)
-    public Response getNewPathogenicitiesForAuthorisation() {
-
-        StreamingOutput stream = new StreamingOutput() {
-
-            @Override
-            public void write(OutputStream os) throws IOException, WebApplicationException {
-
-                JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
-
-                jg.writeStartArray();
-
-                try (Transaction tx = graphDb.beginTx()) {
-                    try (ResourceIterator<Node> pathogenicityNodeIterator = graphDb.findNodes(Neo4j.getPathogenicityLabel())) {
-
-                        while (pathogenicityNodeIterator.hasNext()) {
-                            Node pathogenicityNode = pathogenicityNodeIterator.next();
-
-                            Relationship addedByRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getAddedByRelationship(), Direction.OUTGOING);
-                            Relationship removedByRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getRemovedByRelationship(), Direction.OUTGOING);
-                            Relationship addAuthorisedByRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getAddAuthorisedByRelationship(), Direction.OUTGOING);
-                            Relationship removeAuthorisedByRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getRemoveAuthorisedByRelationship(), Direction.OUTGOING);
-                            Relationship hasPathogenicityRelationship = pathogenicityNode.getSingleRelationship(Neo4j.getHasPathogenicityRelationship(), Direction.INCOMING);
-
-                            if (addedByRelationship != null && removedByRelationship == null && addAuthorisedByRelationship == null && removeAuthorisedByRelationship == null){
-                                Node userNode = addedByRelationship.getEndNode();
-                                Node variantNode = hasPathogenicityRelationship.getStartNode();
-
-                                if (userNode.hasLabel(Neo4j.getUserLabel()) && variantNode.hasLabel(Neo4j.getVariantLabel())){
-
-                                    jg.writeStartObject();
-
-                                    if (variantNode.hasProperty("VariantId")) jg.writeStringField("VariantId", variantNode.getProperty("VariantId").toString());
-                                    jg.writeNumberField("PathogenicityNodeId", pathogenicityNode.getId());
-                                    if (addedByRelationship.hasProperty("Classification")) jg.writeNumberField("Classification", (int) addedByRelationship.getProperty("Classification"));
-                                    jg.writeBooleanField("AddAction", true);
-                                    if (userNode.hasProperty("UserId")) jg.writeStringField("UserId", userNode.getProperty("UserId").toString());
-                                    if (addedByRelationship.hasProperty("Date")) jg.writeNumberField("Date", (long) addedByRelationship.getProperty("Date"));
-                                    if (addedByRelationship.hasProperty("Evidence")) jg.writeStringField("Evidence", addedByRelationship.getProperty("Evidence").toString());
-
-                                    jg.writeEndObject();
-
-                                }
-
-                            } else if (addedByRelationship != null && removedByRelationship != null && removeAuthorisedByRelationship == null){
-                                Node userNode = removedByRelationship.getEndNode();
-                                Node variantNode = hasPathogenicityRelationship.getStartNode();
-
-                                if (userNode.hasLabel(Neo4j.getUserLabel()) && variantNode.hasLabel(Neo4j.getVariantLabel())){
-
-                                    jg.writeStartObject();
-
-                                    if (variantNode.hasProperty("VariantId")) jg.writeStringField("VariantId", variantNode.getProperty("VariantId").toString());
-                                    jg.writeNumberField("PathogenicityNodeId", pathogenicityNode.getId());
-                                    if (addedByRelationship.hasProperty("Classification")) jg.writeNumberField("Classification", (int) addedByRelationship.getProperty("Classification"));
-                                    jg.writeBooleanField("AddAction", false);
-                                    if (userNode.hasProperty("UserId")) jg.writeStringField("UserId", userNode.getProperty("UserId").toString());
-                                    if (removedByRelationship.hasProperty("Date")) jg.writeNumberField("Date", (long) removedByRelationship.getProperty("Date"));
-                                    if (removedByRelationship.hasProperty("Evidence")) jg.writeStringField("Evidence", removedByRelationship.getProperty("Evidence").toString());
-
-                                    jg.writeEndObject();
-
-                                }
-
-                            }
-
-                        }
-
-                    }
-                }
-
-                jg.writeEndArray();
-
-                jg.flush();
-                jg.close();
-
-            }
-
-        };
-
-        return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
     }
 
 }
