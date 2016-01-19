@@ -781,7 +781,7 @@ public class VariantDatabasePlugin
         jg.writeEndArray();
 
         //write filters
-        jg.writeFieldName("filter");
+        jg.writeFieldName("filters");
         jg.writeStartArray();
 
         jg.writeStartObject();
@@ -1402,8 +1402,8 @@ public class VariantDatabasePlugin
 
             for (VariantDatabase.kGPhase3Population population : VariantDatabase.kGPhase3Population.values()) {
 
-                if (variantNode.hasProperty(population.toString())){
-                    if ((float) variantNode.getProperty(population.toString()) > maxAlleleFrequency){
+                if (variantNode.hasProperty("kGPhase3" + population.toString() + "Af")){
+                    if ((float) variantNode.getProperty("kGPhase3" + population.toString() + "Af") > maxAlleleFrequency){
                         return false;
                     }
                 }
@@ -1421,8 +1421,8 @@ public class VariantDatabasePlugin
 
             for (VariantDatabase.exacPopulation population : VariantDatabase.exacPopulation.values()) {
 
-                if (variantNode.hasProperty(population.toString())){
-                    if ((float) variantNode.getProperty(population.toString()) > maxAlleleFrequency){
+                if (variantNode.hasProperty("exac" + population.toString() + "Af")){
+                    if ((float) variantNode.getProperty("exac" + population.toString() + "Af") > maxAlleleFrequency){
                         return false;
                     }
                 }
@@ -1642,13 +1642,13 @@ public class VariantDatabasePlugin
                 jg.writeNumberField("phastCons", (float) variantNode.getProperty("phastCons"));
             }
             for (VariantDatabase.kGPhase3Population population : VariantDatabase.kGPhase3Population.values()) {
-                if (variantNode.hasProperty(population.toString())){
-                    jg.writeNumberField(population.toString(), (double) Math.round( ((float) variantNode.getProperty(population.toString()) * 100) * 100d) / 100d);
+                if (variantNode.hasProperty("kGPhase3" + population.toString() + "Af")){
+                    jg.writeNumberField("kGPhase3" + population.toString() + "Af", (double) Math.round( ((float) variantNode.getProperty("kGPhase3" + population.toString() + "Af") * 100) * 100d) / 100d);
                 }
             }
             for (VariantDatabase.exacPopulation population : VariantDatabase.exacPopulation.values()) {
-                if (variantNode.hasProperty(population.toString())){
-                    jg.writeNumberField(population.toString(), (double) Math.round( ((float) variantNode.getProperty(population.toString()) * 100) * 100d) / 100d);
+                if (variantNode.hasProperty("exac" + population.toString() + "Af")){
+                    jg.writeNumberField("exac" + population.toString() + "Af", (double) Math.round( ((float) variantNode.getProperty("exac" + population.toString() + "Af") * 100) * 100d) / 100d);
                 }
             }
 
