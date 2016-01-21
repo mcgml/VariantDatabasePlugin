@@ -658,6 +658,7 @@ public class VariantDatabasePlugin
 
                 writeVariantInformation(variantNode, jg);
                 jg.writeStringField("inheritance", getVariantInheritance(inheritanceRel.getType().name()));
+                jg.writeNumberField("quality", (short) inheritanceRel.getProperty("quality"));
 
                 //stratify variants
                 if (inheritanceRel.isType(VariantDatabase.getHasHomVariantRelationship())) {
@@ -757,6 +758,7 @@ public class VariantDatabasePlugin
 
                 writeVariantInformation(variantNode, jg);
                 jg.writeStringField("inheritance", getVariantInheritance(inheritanceRel.getType().name()));
+                jg.writeNumberField("quality", (short) inheritanceRel.getProperty("quality"));
 
                 //stratify variants
                 if (inheritanceRel.isType(VariantDatabase.getHasHetVariantRelationship())) {
@@ -852,6 +854,7 @@ public class VariantDatabasePlugin
 
                     writeVariantInformation(variantNode, jg);
                     jg.writeStringField("inheritance", getVariantInheritance(inheritanceRel.getType().name()));
+                    jg.writeNumberField("quality", (short) inheritanceRel.getProperty("quality"));
                     jg.writeNumberField("filter", 0);
 
                     notAutosomalVariants++;
@@ -863,6 +866,7 @@ public class VariantDatabasePlugin
 
                     writeVariantInformation(variantNode, jg);
                     jg.writeStringField("inheritance", getVariantInheritance(inheritanceRel.getType().name()));
+                    jg.writeNumberField("quality", (short) inheritanceRel.getProperty("quality"));
                     jg.writeNumberField("filter", 1);
 
                     notExACRareVariants++;
@@ -874,6 +878,7 @@ public class VariantDatabasePlugin
 
                     writeVariantInformation(variantNode, jg);
                     jg.writeStringField("inheritance", getVariantInheritance(inheritanceRel.getType().name()));
+                    jg.writeNumberField("quality", (short) inheritanceRel.getProperty("quality"));
                     jg.writeNumberField("filter", 2);
 
                     not1KGRareVariants++;
@@ -901,6 +906,7 @@ public class VariantDatabasePlugin
 
                         writeVariantInformation(variantNode, jg);
                         jg.writeStringField("Inheritance", getVariantInheritance(inheritanceRel.getType().name()));
+                        jg.writeNumberField("quality", (short) inheritanceRel.getProperty("quality"));
                         jg.writeNumberField("filter", 3);
 
                         noAnnotation++;
@@ -929,6 +935,7 @@ public class VariantDatabasePlugin
                         for (Relationship inheritanceRel : variantNode.getRelationships(Direction.INCOMING)){
                             if (inheritanceRel.getStartNode().equals(runInfoNode)){
                                 jg.writeStringField("inheritance", getVariantInheritance(inheritanceRel.getType().name()));
+                                jg.writeNumberField("quality", (short) inheritanceRel.getProperty("quality"));
                             }
                         }
 
@@ -954,6 +961,7 @@ public class VariantDatabasePlugin
                         for (Relationship inheritanceRel : variantNode.getRelationships(Direction.INCOMING)){
                             if (inheritanceRel.getStartNode().equals(runInfoNode)){
                                 jg.writeStringField("inheritance", getVariantInheritance(inheritanceRel.getType().name()));
+                                jg.writeNumberField("quality", (short) inheritanceRel.getProperty("quality"));
                             }
                         }
 
@@ -1344,7 +1352,7 @@ public class VariantDatabasePlugin
                         //headers
                         jg.writeRaw("#Variant Report v" + version + "\n");
                         jg.writeRaw("#Created " + graphDb.getNodeById(parameters.userNodeId).getProperty("fullName") + " " + dateFormat.format(new Date()) + "\n");
-                        jg.writeRaw("SampleId,WorklistId,Variant,Occurrence,dbSNP,GERP++,PhyloP,PhastCons,");
+                        jg.writeRaw("SampleId,WorklistId,Variant,Genotype,Quality,Occurrence,dbSNP,GERP++,PhyloP,PhastCons,");
 
                         //print pop freq header
                         for (VariantDatabase.kGPhase3Population population : VariantDatabase.kGPhase3Population.values()) {
@@ -1385,6 +1393,8 @@ public class VariantDatabasePlugin
 
                                                             //variant
                                                             if (variantNode.hasProperty("variantId")) jg.writeRaw(variantNode.getProperty("variantId").toString() + ","); else jg.writeRaw(",");
+                                                            jg.writeRaw(getVariantInheritance(relationship.getType().name()) + ",");
+                                                            if (relationship.hasProperty("quality")) jg.writeRaw(relationship.getProperty("quality").toString() + ","); else jg.writeRaw(",");
                                                             jg.writeRaw(getGlobalVariantOccurrence(variantNode) + ",");
                                                             if (variantNode.hasProperty("dbSnpId")) jg.writeRaw(variantNode.getProperty("dbSnpId").toString() + ","); else jg.writeRaw(",");
                                                             if (variantNode.hasProperty("gerp")) jg.writeRaw(variantNode.getProperty("gerp").toString() + ","); else jg.writeRaw(",");
@@ -1791,6 +1801,12 @@ public class VariantDatabasePlugin
 
             jg.writeNumberField("variantNodeId", variantNode.getId());
             jg.writeNumberField("occurrence", getGlobalVariantOccurrence(variantNode));
+
+            if (variantNode.hasLabel(VariantDatabase.getSnpLabel())) {
+                jg.writeStringField("type", "Snp");
+            } else if (variantNode.hasLabel(VariantDatabase.getIndelLabel())){
+                jg.writeStringField("type", "Indel");
+            }
 
             if (variantNode.hasProperty("variantId")) {
                 jg.writeStringField("variantId", variantNode.getProperty("variantId").toString());
