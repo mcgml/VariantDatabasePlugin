@@ -8,6 +8,8 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 import java.lang.reflect.Method;
 import java.nio.charset.Charset;
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
 import java.util.*;
 
 import javax.ws.rs.*;
@@ -25,6 +27,7 @@ import org.neo4j.graphdb.*;
 @Path("/variantdatabase")
 public class VariantDatabasePlugin
 {
+    private double version = 0.5;
     private GraphDatabaseService graphDb;
     private final ObjectMapper objectMapper;
     private Method[] methods;
@@ -1317,6 +1320,155 @@ public class VariantDatabasePlugin
 
     }
 
+    @POST
+    @Path("/getvariantreport")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response getVariantReport(final String json) {
+
+        try {
+            StreamingOutput stream = new StreamingOutput() {
+
+                @Override
+                public void write(OutputStream os) throws IOException, WebApplicationException {
+
+                    DateFormat dateFormat = new SimpleDateFormat("dd/MM/yy HH:mm:ss");
+                    JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
+                    Parameters parameters = objectMapper.readValue(json, Parameters.class);
+
+                    try (Transaction tx = graphDb.beginTx()) {
+
+                        Node runInfoNode = graphDb.getNodeById(parameters.runInfoNodeId);
+                        Node sampleNode = runInfoNode.getSingleRelationship(VariantDatabase.getHasAnalysisRelationship(), Direction.INCOMING).getStartNode();
+
+                        //headers
+                        jg.writeRaw("#Variant Report v" + version + "\n");
+                        jg.writeRaw("#Created " + graphDb.getNodeById(parameters.userNodeId).getProperty("fullName") + " " + dateFormat.format(new Date()) + "\n");
+                        jg.writeRaw("SampleId,WorklistId,Variant,Occurrence,dbSNP,GERP++,PhyloP,PhastCons,");
+
+                        //print pop freq header
+                        for (VariantDatabase.kGPhase3Population population : VariantDatabase.kGPhase3Population.values()) {
+                            jg.writeRaw("1KG_" + population.toString() + ",");
+                        }
+                        for (VariantDatabase.exacPopulation population : VariantDatabase.exacPopulation.values()) {
+                            jg.writeRaw("ExAC_" + population.toString() + ",");
+                        }
+
+                        jg.writeRaw("Gene,Transcript,TranscriptType,TranscriptBiotype,CanonicalTranscript,Consequence,HGVSc,HGVSp,Location,SIFT,PolyPhen,Codons\n");
+
+                        //loop over variants node ids
+                        for (long variantNodeId : parameters.variantNodeIds){
+                            Node variantNode = graphDb.getNodeById(variantNodeId);
+
+                            //loop over selected variants
+                            for (Relationship relationship : variantNode.getRelationships(Direction.INCOMING)){
+                                if (relationship.getStartNode().getId() == parameters.runInfoNodeId){
+
+                                    for (Relationship consequenceRel : variantNode.getRelationships(Direction.OUTGOING)) {
+                                        Node annotationNode = consequenceRel.getEndNode();
+
+                                        if (annotationNode.hasLabel(VariantDatabase.getAnnotationLabel())){
+
+                                            for (Relationship inFeatureRel : annotationNode.getRelationships(Direction.OUTGOING, VariantDatabase.getInFeatureRelationship())) {
+                                                Node featureNode = inFeatureRel.getEndNode();
+
+                                                if (featureNode.hasLabel(VariantDatabase.getFeatureLabel())){
+
+                                                    for (Relationship biotypeRel : featureNode.getRelationships(Direction.INCOMING)) {
+                                                        Node symbolNode = biotypeRel.getStartNode();
+
+                                                        if (symbolNode.hasLabel(VariantDatabase.getSymbolLabel())){
+
+                                                            //sample
+                                                            if (sampleNode.hasProperty("sampleId")) jg.writeRaw(sampleNode.getProperty("sampleId").toString() + ","); else jg.writeRaw(",");
+                                                            if (runInfoNode.hasProperty("worklistId")) jg.writeRaw(runInfoNode.getProperty("worklistId").toString() + ","); else jg.writeRaw(",");
+
+                                                            //variant
+                                                            if (variantNode.hasProperty("variantId")) jg.writeRaw(variantNode.getProperty("variantId").toString() + ","); else jg.writeRaw(",");
+                                                            jg.writeRaw(getGlobalVariantOccurrence(variantNode) + ",");
+                                                            if (variantNode.hasProperty("dbSnpId")) jg.writeRaw(variantNode.getProperty("dbSnpId").toString() + ","); else jg.writeRaw(",");
+                                                            if (variantNode.hasProperty("gerp")) jg.writeRaw(variantNode.getProperty("gerp").toString() + ","); else jg.writeRaw(",");
+                                                            if (variantNode.hasProperty("phyloP")) jg.writeRaw(variantNode.getProperty("phyloP").toString() + ","); else jg.writeRaw(",");
+                                                            if (variantNode.hasProperty("phastCons")) jg.writeRaw(variantNode.getProperty("phastCons").toString() + ","); else jg.writeRaw(",");
+
+                                                            //population frequencies
+                                                            for (VariantDatabase.kGPhase3Population population : VariantDatabase.kGPhase3Population.values()) {
+                                                                if (variantNode.hasProperty("kGPhase3" + population.toString() + "Af")){
+                                                                    jg.writeRaw(variantNode.getProperty("kGPhase3" + population.toString() + "Af").toString() + ",");
+                                                                } else {
+                                                                    jg.writeRaw(",");
+                                                                }
+                                                            }
+                                                            for (VariantDatabase.exacPopulation population : VariantDatabase.exacPopulation.values()) {
+                                                                if (variantNode.hasProperty("exac" + population.toString() + "Af")){
+                                                                    jg.writeRaw(variantNode.getProperty("exac" + population.toString() + "Af").toString() + ",");
+                                                                } else {
+                                                                    jg.writeRaw(",");
+                                                                }
+                                                            }
+
+                                                            //gene & transcript
+                                                            if (symbolNode.hasProperty("symbolId")) jg.writeRaw(symbolNode.getProperty("symbolId").toString() + ","); else jg.writeRaw(",");
+                                                            if (featureNode.hasProperty("featureId")) jg.writeRaw(featureNode.getProperty("featureId").toString() + ","); else jg.writeRaw(",");
+                                                            if (featureNode.hasProperty("featureType")) jg.writeRaw(featureNode.getProperty("featureType").toString() + ","); else jg.writeRaw(",");
+                                                            jg.writeRaw(getTranscriptBiotype(biotypeRel.getType().name()) + ",");
+
+                                                            if (featureNode.hasLabel(VariantDatabase.getCanonicalLabel())) {
+                                                                jg.writeRaw("TRUE,");
+                                                            } else {
+                                                                jg.writeRaw("FALSE,");
+                                                            }
+
+                                                            //functional annotations
+                                                            jg.writeRaw(getFunctionalConsequence(consequenceRel.getType().name()) + ",");
+                                                            if (annotationNode.hasProperty("hgvsc")) jg.writeRaw(annotationNode.getProperty("hgvsc").toString() + ","); else jg.writeRaw(",");
+                                                            if (annotationNode.hasProperty("hgvsp")) jg.writeRaw(annotationNode.getProperty("hgvsp").toString() + ","); else jg.writeRaw(",");
+
+                                                            if (annotationNode.hasProperty("exon")) {
+                                                                jg.writeRaw(annotationNode.getProperty("exon").toString() + ",");
+                                                            } else if (annotationNode.hasProperty("intron")) {
+                                                                jg.writeRaw(annotationNode.getProperty("intron").toString() + ",");
+                                                            } else {
+                                                                jg.writeRaw(",");
+                                                            }
+
+                                                            if (annotationNode.hasProperty("sift")) jg.writeRaw(annotationNode.getProperty("sift").toString() + ","); else jg.writeRaw(",");
+                                                            if (annotationNode.hasProperty("polyphen")) jg.writeRaw(annotationNode.getProperty("polyphen").toString() + ","); else jg.writeRaw(",");
+                                                            if (annotationNode.hasProperty("codons")) jg.writeRaw(annotationNode.getProperty("codons").toString() + "\n"); else jg.writeRaw("\n");
+
+                                                        }
+
+                                                    }
+
+                                                }
+
+                                            }
+
+                                        }
+
+                                    }
+                                }
+                            }
+
+                        }
+
+                    }
+
+                    jg.flush();
+                    jg.close();
+                }
+
+            };
+
+            return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+        } catch (Exception e) {
+            return Response
+                    .status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        }
+    }
+
     /*helper functions*/
     private int getGlobalVariantOccurrence(Node variantNode){
 
@@ -1509,6 +1661,20 @@ public class VariantDatabasePlugin
 
         return null;
     }
+    private String getTranscriptBiotype(String biotypeRelName){
+        if (biotypeRelName.length() > 12) {
+            return biotypeRelName.substring(4, biotypeRelName.length() - 8);
+        } else {
+            return biotypeRelName;
+        }
+    }
+    private String getFunctionalConsequence(String consequenceRelName){
+        if (consequenceRelName.length() > 12) {
+            return consequenceRelName.substring(4, consequenceRelName.length() - 12);
+        } else {
+            return consequenceRelName;
+        }
+    }
 
     /*write functions*/
     private void writeFullUserInformation(Node userNode, JsonGenerator jg) throws IOException {
@@ -1696,14 +1862,10 @@ public class VariantDatabasePlugin
             }
 
             //consequence
-            String consequence = consequenceRel.getType().name();
-            if (consequence.length() > 16) {
-                jg.writeStringField("consequence", consequence.substring(4, consequence.length() - 12));
-            }
+            jg.writeStringField("consequence", getFunctionalConsequence(consequenceRel.getType().name()));
 
             //biotype
-            String biotype = biotypeRel.getType().name();
-            if (biotype.length() > 12) jg.writeStringField("biotype", biotype.substring(4, biotype.length() - 8));
+            jg.writeStringField("biotype", getTranscriptBiotype(biotypeRel.getType().name()));
 
         }
 

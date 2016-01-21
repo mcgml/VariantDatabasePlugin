@@ -16,6 +16,7 @@ public class Parameters {
     public String[] virtualPanelList;
     public Long[] excludeRunInfoNodes;
     public Long[] includePanelNodes;
+    public Long[] variantNodeIds;
     public Long panelNodeId;
     public Long actionNodeId;
     public Boolean addorRemove;
