@@ -611,6 +611,9 @@ public class VariantDatabasePlugin
                     case "Autosomal Recessive Workflow v1":
                         runAutosomalRecessiveWorkflowv1(jg, excludeRunInfoNodes, includePanelNodes, runInfoNode);
                         break;
+                    case "X Linked Workflow v1":
+                        runXLinkedWorkflowv1(jg, excludeRunInfoNodes, includePanelNodes, runInfoNode);
+                        break;
                     default:
                         throw new IllegalArgumentException("Unknown workflow");
                 }
@@ -1008,6 +1011,98 @@ public class VariantDatabasePlugin
         jg.writeStartObject();
         jg.writeStringField("key", "Single Gene Change");
         jg.writeNumberField("y", singleGeneChange);
+        jg.writeEndObject();
+
+        jg.writeStartObject();
+        jg.writeStringField("key", "Pass");
+        jg.writeNumberField("y", passVariants);
+        jg.writeEndObject();
+
+        jg.writeEndArray();
+
+        jg.writeNumberField("total", total);
+
+        jg.writeEndObject();
+
+    }
+
+    @Workflow(name = "X Linked Workflow v1", description = "A workflow to prioritise X-linked calls")
+    public void runXLinkedWorkflowv1(JsonGenerator jg, HashSet<Long> excludeRunInfoNodes, HashSet<Long> includePanelNodes, Node runInfoNode) throws IOException {
+
+        boolean includeCallsFromPanel = false, excludeCallsFromSample = false;
+        int notXChromosomeVariants = 0, notExACRareVariants = 0, not1KGRareVariants = 0, passVariants = 0, total = 0;
+
+        if (includePanelNodes.size() > 0) includeCallsFromPanel = true;
+        if (excludeRunInfoNodes.size() > 0) excludeCallsFromSample = true;
+
+        jg.writeStartObject();
+
+        jg.writeFieldName("variants");
+        jg.writeStartArray();
+
+        try (Transaction tx = graphDb.beginTx()) {
+
+            for (Relationship inheritanceRel : runInfoNode.getRelationships(Direction.OUTGOING)) {
+                Node variantNode = inheritanceRel.getEndNode();
+
+                //check if variant belongs to supplied panel
+                if (includeCallsFromPanel && !variantBelongsToVirtualPanel(variantNode, includePanelNodes)){
+                    continue;
+                }
+
+                //check if variant is not present in exclusion samples
+                if (excludeCallsFromSample && variantPresentInExclusionSamples(variantNode, excludeRunInfoNodes)){
+                    continue;
+                }
+
+                jg.writeStartObject();
+
+                writeVariantInformation(variantNode, jg);
+                jg.writeStringField("inheritance", getVariantInheritance(inheritanceRel.getType().name()));
+                jg.writeNumberField("quality", (short) inheritanceRel.getProperty("quality"));
+
+                //stratify variants
+                if (!variantNode.hasLabel(VariantDatabase.getxChromLabel())) {
+                    jg.writeNumberField("filter", 0);
+                    notXChromosomeVariants++;
+                } else if (!isExACRareVariant(variantNode, 0.05)) {
+                    jg.writeNumberField("filter", 1);
+                    notExACRareVariants++;
+                } else if (!is1KGRareVariant(variantNode, 0.05)) {
+                    jg.writeNumberField("filter", 2);
+                    not1KGRareVariants++;
+                } else {
+                    jg.writeNumberField("filter", 3);
+                    passVariants++;
+                }
+
+                total++;
+
+                jg.writeEndObject();
+
+            }
+
+        }
+
+        jg.writeEndArray();
+
+        //write filters
+        jg.writeFieldName("filters");
+        jg.writeStartArray();
+
+        jg.writeStartObject();
+        jg.writeStringField("key", "NotXLinked");
+        jg.writeNumberField("y", notXChromosomeVariants);
+        jg.writeEndObject();
+
+        jg.writeStartObject();
+        jg.writeStringField("key", "ExAC >5% Frequency");
+        jg.writeNumberField("y", notExACRareVariants);
+        jg.writeEndObject();
+
+        jg.writeStartObject();
+        jg.writeStringField("key", "1KG >5% Frequency");
+        jg.writeNumberField("y", not1KGRareVariants);
         jg.writeEndObject();
 
         jg.writeStartObject();
