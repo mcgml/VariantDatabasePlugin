@@ -19,7 +19,7 @@ public class Parameters {
     public Long[] variantNodeIds;
     public Long panelNodeId;
     public Long actionNodeId;
-    public Boolean addorRemove;
+    public Boolean addOrRemove;
     public String userId;
     public String password;
     public String workflowName;

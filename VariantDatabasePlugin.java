@@ -1341,7 +1341,7 @@ public class VariantDatabasePlugin
                 userNode = graphDb.getNodeById(parameters.userNodeId);
             }
 
-            if (parameters.addorRemove){
+            if (parameters.addOrRemove){
                 UserAction.authUserAction(graphDb, actionNode, VariantDatabase.getAddAuthorisedByRelationship(), userNode);
             } else {
                 UserAction.authUserAction(graphDb, actionNode, VariantDatabase.getRemoveAuthorisedByRelationship(), userNode);
@@ -1438,6 +1438,7 @@ public class VariantDatabasePlugin
                     DateFormat dateFormat = new SimpleDateFormat("dd/MM/yy HH:mm:ss");
                     JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
                     Parameters parameters = objectMapper.readValue(json, Parameters.class);
+                    float maxAf;
 
                     try (Transaction tx = graphDb.beginTx()) {
 
@@ -1453,11 +1454,13 @@ public class VariantDatabasePlugin
                         for (VariantDatabase.kGPhase3Population population : VariantDatabase.kGPhase3Population.values()) {
                             jg.writeRaw("1KG_" + population.toString() + ",");
                         }
+                        jg.writeRaw("Max_1KG,");
                         for (VariantDatabase.exacPopulation population : VariantDatabase.exacPopulation.values()) {
                             jg.writeRaw("ExAC_" + population.toString() + ",");
                         }
+                        jg.writeRaw("Max_ExAC,");
 
-                        jg.writeRaw("Gene,Transcript,TranscriptType,TranscriptBiotype,CanonicalTranscript,Consequence,HGVSc,HGVSp,Location,SIFT,PolyPhen,Codons\n");
+                        jg.writeRaw("Gene,Transcript,TranscriptType,TranscriptBiotype,CanonicalTranscript,Consequence,Severe,HGVSc,HGVSp,Location,SIFT,PolyPhen,Codons\n");
 
                         //loop over variants node ids
                         for (long variantNodeId : parameters.variantNodeIds){
@@ -1496,20 +1499,42 @@ public class VariantDatabasePlugin
                                                             if (variantNode.hasProperty("phyloP")) jg.writeRaw(variantNode.getProperty("phyloP").toString() + ","); else jg.writeRaw(",");
                                                             if (variantNode.hasProperty("phastCons")) jg.writeRaw(variantNode.getProperty("phastCons").toString() + ","); else jg.writeRaw(",");
 
-                                                            //population frequencies
+                                                            //1kg
+                                                            maxAf = -1f;
                                                             for (VariantDatabase.kGPhase3Population population : VariantDatabase.kGPhase3Population.values()) {
                                                                 if (variantNode.hasProperty("kGPhase3" + population.toString() + "Af")){
                                                                     jg.writeRaw(variantNode.getProperty("kGPhase3" + population.toString() + "Af").toString() + ",");
+
+                                                                    float tmp = (float) variantNode.getProperty("kGPhase3" + population.toString() + "Af");
+                                                                    if (tmp > maxAf) maxAf = tmp;
+
                                                                 } else {
                                                                     jg.writeRaw(",");
                                                                 }
                                                             }
+                                                            if (maxAf != -1f){
+                                                                jg.writeRaw(Float.toString(maxAf) + ",");
+                                                            } else {
+                                                                jg.writeRaw(",");
+                                                            }
+
+                                                            //ExAC
+                                                            maxAf = -1f;
                                                             for (VariantDatabase.exacPopulation population : VariantDatabase.exacPopulation.values()) {
                                                                 if (variantNode.hasProperty("exac" + population.toString() + "Af")){
                                                                     jg.writeRaw(variantNode.getProperty("exac" + population.toString() + "Af").toString() + ",");
+
+                                                                    float tmp = (float) variantNode.getProperty("exac" + population.toString() + "Af");
+                                                                    if (tmp > maxAf) maxAf = tmp;
+
                                                                 } else {
                                                                     jg.writeRaw(",");
                                                                 }
+                                                            }
+                                                            if (maxAf != -1f){
+                                                                jg.writeRaw(Float.toString(maxAf) + ",");
+                                                            } else {
+                                                                jg.writeRaw(",");
                                                             }
 
                                                             //gene & transcript
@@ -1525,7 +1550,9 @@ public class VariantDatabasePlugin
                                                             }
 
                                                             //functional annotations
-                                                            jg.writeRaw(getFunctionalConsequence(consequenceRel.getType().name()) + ",");
+                                                            String consequence = getFunctionalConsequence(consequenceRel.getType().name());
+                                                            jg.writeRaw(consequence + ",");
+                                                            jg.writeRaw(isConsequenceSevere(consequence) + ",");
                                                             if (annotationNode.hasProperty("hgvsc")) jg.writeRaw(annotationNode.getProperty("hgvsc").toString() + ","); else jg.writeRaw(",");
                                                             if (annotationNode.hasProperty("hgvsp")) jg.writeRaw(annotationNode.getProperty("hgvsp").toString() + ","); else jg.writeRaw(",");
 
@@ -1575,6 +1602,59 @@ public class VariantDatabasePlugin
     }
 
     /*helper functions*/
+    private Boolean variantHasSevereConsequence(Node variantNode){
+        try (Transaction tx = graphDb.beginTx()) {
+            for (Relationship consequenceRel : variantNode.getRelationships(Direction.OUTGOING)){
+                if (consequenceRel.getEndNode().hasLabel(VariantDatabase.getAnnotationLabel())){
+                    Boolean severity = isConsequenceSevere(getFunctionalConsequence(consequenceRel.getType().name()));
+
+                    if (severity != null && severity){
+                        return true;
+                    }
+
+                }
+            }
+        }
+        return false;
+    }
+    private Boolean isConsequenceSevere(String consequence){
+        switch (consequence) {
+            case "3_PRIME_UTR_VARIANT":
+                return false;
+            case "5_PRIME_UTR_VARIANT":
+                return false;
+            case "DOWNSTREAM_GENE_VARIANT":
+                return false;
+            case "UPSTREAM_GENE_VARIANT":
+                return false;
+            case "INTRON_VARIANT":
+                return false;
+            case "SYNONYMOUS_VARIANT":
+                return false;
+            case "SPLICE_REGION_VARIANT":
+                return false;
+            case "MISSENSE_VARIANT":
+                return true;
+            case "STOP_LOST":
+                return true;
+            case "INFRAME_DELETION":
+                return true;
+            case "INFRAME_INSERTION":
+                return true;
+            case "FRAMESHIFT_VARIANT":
+                return true;
+            case "SPLICE_ACCEPTOR_VARIANT":
+                return true;
+            case "SPLICE_DONOR_VARIANT":
+                return true;
+            case "STOP_GAINED":
+                return true;
+            case "START_LOST":
+                return true;
+            default:
+                return null;
+        }
+    }
     private int getGlobalVariantOccurrence(Node variantNode){
 
         int seen = 0;
@@ -1928,6 +2008,7 @@ public class VariantDatabasePlugin
                     jg.writeNumberField("exac" + population.toString() + "Af", (double) Math.round( ((float) variantNode.getProperty("exac" + population.toString() + "Af") * 100) * 100d) / 100d);
                 }
             }
+            jg.writeBooleanField("severe", variantHasSevereConsequence(variantNode));
 
         }
     }
