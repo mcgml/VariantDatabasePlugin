@@ -14,20 +14,22 @@ import java.util.*;
 
 import javax.ws.rs.*;
 import javax.ws.rs.Path;
-import javax.ws.rs.core.Context;
-import javax.ws.rs.core.MediaType;
-import javax.ws.rs.core.Response;
-import javax.ws.rs.core.StreamingOutput;
+import javax.ws.rs.core.*;
 
 import org.codehaus.jackson.JsonEncoding;
 import org.codehaus.jackson.JsonGenerator;
 import org.codehaus.jackson.map.ObjectMapper;
 import org.neo4j.graphdb.*;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 @Path("/variantdatabase")
 public class VariantDatabasePlugin
 {
-    private double version = 0.5;
+    private static final Logger logger = LoggerFactory.getLogger(VariantDatabasePlugin.class);
+
+    private double version = 0.6;
     private GraphDatabaseService graphDb;
     private final ObjectMapper objectMapper;
     private Method[] methods;
@@ -100,6 +102,7 @@ public class VariantDatabasePlugin
             return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
 
         } catch (Exception e) {
+            logger.error(e.getMessage());
             return Response
                     .status(Response.Status.INTERNAL_SERVER_ERROR)
                     .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
@@ -160,6 +163,7 @@ public class VariantDatabasePlugin
             return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
 
         } catch (Exception e) {
+            logger.error(e.getMessage());
             return Response
                     .status(Response.Status.INTERNAL_SERVER_ERROR)
                     .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
@@ -212,6 +216,7 @@ public class VariantDatabasePlugin
             return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
 
         } catch (Exception e) {
+            logger.error(e.getMessage());
             return Response
                     .status(Response.Status.INTERNAL_SERVER_ERROR)
                     .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
@@ -255,17 +260,7 @@ public class VariantDatabasePlugin
                     //print variant info
                     if (variantNode != null){
                         writeVariantInformation(variantNode, jg);
-
-                        //write user action history
-                        try (Transaction tx = graphDb.beginTx()) {
-                            jg.writeArrayFieldStart("history");
-
-                            for (Relationship relationship : variantNode.getRelationships(Direction.OUTGOING, VariantDatabase.getHasPathogenicityRelationship())){
-                                writeActionHistory(relationship.getEndNode(), jg);
-                            }
-
-                            jg.writeEndArray();
-                        }
+                        writeEventHistory(variantNode,jg);
                     }
 
                     jg.writeEndObject();
@@ -278,6 +273,7 @@ public class VariantDatabasePlugin
 
             return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
         } catch (Exception e) {
+            logger.error(e.getMessage());
             return Response
                     .status(Response.Status.INTERNAL_SERVER_ERROR)
                     .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
@@ -329,6 +325,7 @@ public class VariantDatabasePlugin
             return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
 
         } catch (Exception e) {
+            logger.error(e.getMessage());
             return Response
                     .status(Response.Status.INTERNAL_SERVER_ERROR)
                     .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
@@ -390,6 +387,7 @@ public class VariantDatabasePlugin
 
             return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
         } catch (Exception e) {
+            logger.error(e.getMessage());
             return Response
                     .status(Response.Status.INTERNAL_SERVER_ERROR)
                     .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
@@ -465,6 +463,7 @@ public class VariantDatabasePlugin
 
             return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
         } catch (Exception e) {
+            logger.error(e.getMessage());
             return Response
                     .status(Response.Status.INTERNAL_SERVER_ERROR)
                     .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
@@ -522,6 +521,7 @@ public class VariantDatabasePlugin
 
             return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
         } catch (Exception e) {
+            logger.error(e.getMessage());
             return Response
                     .status(Response.Status.INTERNAL_SERVER_ERROR)
                     .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
@@ -571,6 +571,7 @@ public class VariantDatabasePlugin
             return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
 
         } catch (Exception e) {
+            logger.error(e.getMessage());
             return Response
                     .status(Response.Status.INTERNAL_SERVER_ERROR)
                     .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
@@ -584,48 +585,57 @@ public class VariantDatabasePlugin
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
     public Response getFilteredVariants(final String json) {
-        StreamingOutput stream = new StreamingOutput() {
 
-            @Override
-            public void write(OutputStream os) throws IOException {
+        try{
+            StreamingOutput stream = new StreamingOutput() {
 
-                Parameters parameters = objectMapper.readValue(json, Parameters.class);
-                JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
+                @Override
+                public void write(OutputStream os) throws IOException {
 
-                HashSet<Long> excludeRunInfoNodes = new HashSet<>(Arrays.asList(parameters.excludeRunInfoNodes));
-                HashSet<Long> includePanelNodes = new HashSet<>(Arrays.asList(parameters.includePanelNodes));
-                Node runInfoNode;
+                    Parameters parameters = objectMapper.readValue(json, Parameters.class);
+                    JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
 
-                try (Transaction tx = graphDb.beginTx()) {
-                    runInfoNode = graphDb.getNodeById(parameters.runInfoNodeId);
+                    HashSet<Long> excludeRunInfoNodes = new HashSet<>(Arrays.asList(parameters.excludeRunInfoNodes));
+                    HashSet<Long> includePanelNodes = new HashSet<>(Arrays.asList(parameters.includePanelNodes));
+                    Node runInfoNode;
+
+                    try (Transaction tx = graphDb.beginTx()) {
+                        runInfoNode = graphDb.getNodeById(parameters.runInfoNodeId);
+                    }
+
+                    //exec workflow
+                    switch (parameters.workflowName) {
+                        case "Autosomal Dominant Workflow v1":
+                            runAutosomalDominantWorkflowv1(jg, excludeRunInfoNodes, includePanelNodes, runInfoNode);
+                            break;
+                        case "Rare Homozygous Workflow v1":
+                            runRareHomozygousWorkflowv1(jg, excludeRunInfoNodes, includePanelNodes, runInfoNode);
+                            break;
+                        case "Autosomal Recessive Workflow v1":
+                            runAutosomalRecessiveWorkflowv1(jg, excludeRunInfoNodes, includePanelNodes, runInfoNode);
+                            break;
+                        case "X Linked Workflow v1":
+                            runXLinkedWorkflowv1(jg, excludeRunInfoNodes, includePanelNodes, runInfoNode);
+                            break;
+                        default:
+                            throw new IllegalArgumentException("Unknown workflow");
+                    }
+
+                    jg.flush();
+                    jg.close();
+
                 }
 
-                //exec workflow
-                switch (parameters.workflowName) {
-                    case "Autosomal Dominant Workflow v1":
-                        runAutosomalDominantWorkflowv1(jg, excludeRunInfoNodes, includePanelNodes, runInfoNode);
-                        break;
-                    case "Rare Homozygous Workflow v1":
-                        runRareHomozygousWorkflowv1(jg, excludeRunInfoNodes, includePanelNodes, runInfoNode);
-                        break;
-                    case "Autosomal Recessive Workflow v1":
-                        runAutosomalRecessiveWorkflowv1(jg, excludeRunInfoNodes, includePanelNodes, runInfoNode);
-                        break;
-                    case "X Linked Workflow v1":
-                        runXLinkedWorkflowv1(jg, excludeRunInfoNodes, includePanelNodes, runInfoNode);
-                        break;
-                    default:
-                        throw new IllegalArgumentException("Unknown workflow");
-                }
+            };
 
-                jg.flush();
-                jg.close();
-
-            }
-
-        };
-
-        return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+            return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+        } catch (Exception e) {
+            logger.error(e.getMessage());
+            return Response
+                    .status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        }
     }
 
     @Workflow(name = "Autosomal Dominant Workflow v1", description = "A workflow to prioritise rare autosomal heterozygous calls")
@@ -1166,6 +1176,7 @@ public class VariantDatabasePlugin
                     .build();
 
         } catch (Exception e) {
+            logger.error(e.getMessage());
             return Response
                     .status(Response.Status.INTERNAL_SERVER_ERROR)
                     .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
@@ -1193,6 +1204,7 @@ public class VariantDatabasePlugin
             return Response.status(Response.Status.OK).build();
 
         } catch (Exception e) {
+            logger.error(e.getMessage());
             return Response
                     .status(Response.Status.INTERNAL_SERVER_ERROR)
                     .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
@@ -1225,6 +1237,7 @@ public class VariantDatabasePlugin
 
             return Response.status(Response.Status.OK).build();
         } catch (Exception e) {
+            logger.error(e.getMessage());
             return Response
                     .status(Response.Status.INTERNAL_SERVER_ERROR)
                     .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
@@ -1249,11 +1262,6 @@ public class VariantDatabasePlugin
                 userNode = graphDb.getNodeById(parameters.userNodeId);
             }
 
-            //check no pending approvals
-            if (getVariantPathogenicityPendingApprovalStatus(variantNode) != null){
-                throw new IllegalArgumentException("Cannot modify classification while pending approval.");
-            }
-
             //add user action
             if (parameters.classification < 1 || parameters.classification > 5){
                 throw new IllegalArgumentException("Unknown classification");
@@ -1262,61 +1270,20 @@ public class VariantDatabasePlugin
             HashMap<String, Object> properties = new HashMap<>();
             properties.put("classification", parameters.classification);
 
-            UserAction.addUserAction(graphDb, variantNode, VariantDatabase.getHasPathogenicityRelationship(), Neo4j.addNode(graphDb, VariantDatabase.getVariantPathogenicityLabel(), properties), userNode, parameters.evidence);
+            UserEvent.addUserEvent(graphDb, variantNode, VariantDatabase.getVariantPathogenicityLabel(), userNode, properties);
 
             return Response
                     .status(Response.Status.OK)
                     .build();
 
         } catch (IllegalArgumentException e) {
+            logger.error(e.getMessage());
             return Response
                     .status(Response.Status.BAD_REQUEST)
                     .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
                     .build();
         } catch (Exception e) {
-            return Response
-                    .status(Response.Status.INTERNAL_SERVER_ERROR)
-                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
-                    .build();
-        }
-
-    }
-
-    @POST
-    @Path("/removevariantathogenicity")
-    @Consumes(MediaType.APPLICATION_JSON)
-    @Produces(MediaType.APPLICATION_JSON)
-    public Response removeVariantPathogenicity(final String json) {
-
-        try {
-
-            Parameters parameters = objectMapper.readValue(json, Parameters.class);
-            Node variantNode, userNode, pathogenicityNode;
-
-            try (Transaction tx = graphDb.beginTx()) {
-                variantNode = graphDb.getNodeById(parameters.variantNodeId);
-                userNode = graphDb.getNodeById(parameters.userNodeId);
-                pathogenicityNode = graphDb.getNodeById(parameters.pathogenicityNodeId);
-            }
-
-            //check no pending approvals
-            if (getVariantPathogenicityPendingApprovalStatus(variantNode) != null){
-                throw new IllegalArgumentException("Cannot modify classification while pending approval.");
-            }
-
-            //request to remove action
-            UserAction.removeUserAction(graphDb, pathogenicityNode, userNode, parameters.evidence);
-
-            return Response
-                    .status(Response.Status.OK)
-                    .build();
-
-        } catch (IllegalArgumentException e) {
-            return Response
-                    .status(Response.Status.BAD_REQUEST)
-                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
-                    .build();
-        } catch (Exception e) {
+            logger.error(e.getMessage());
             return Response
                     .status(Response.Status.INTERNAL_SERVER_ERROR)
                     .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
@@ -1334,17 +1301,17 @@ public class VariantDatabasePlugin
         try {
 
             Parameters parameters = objectMapper.readValue(json, Parameters.class);
-            Node actionNode, userNode;
+            Node eventNode, userNode;
 
             try (Transaction tx = graphDb.beginTx()) {
-                actionNode = graphDb.getNodeById(parameters.actionNodeId);
+                eventNode = graphDb.getNodeById(parameters.eventNodeId);
                 userNode = graphDb.getNodeById(parameters.userNodeId);
             }
 
             if (parameters.addOrRemove){
-                UserAction.authUserAction(graphDb, actionNode, VariantDatabase.getAddAuthorisedByRelationship(), userNode);
+                UserEvent.authUserEvent(graphDb, eventNode, userNode);
             } else {
-                UserAction.authUserAction(graphDb, actionNode, VariantDatabase.getRemoveAuthorisedByRelationship(), userNode);
+                UserEvent.rejectUserEvent(graphDb, eventNode, userNode);
             }
 
             return Response
@@ -1352,6 +1319,7 @@ public class VariantDatabasePlugin
                     .build();
 
         } catch (Exception e) {
+            logger.error(e.getMessage());
             return Response
                     .status(Response.Status.INTERNAL_SERVER_ERROR)
                     .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
@@ -1377,24 +1345,18 @@ public class VariantDatabasePlugin
                     jg.writeStartArray();
 
                     try (Transaction tx = graphDb.beginTx()) {
-                        try (ResourceIterator<Node> variantNodeIterator = graphDb.findNodes(VariantDatabase.getVariantLabel())){
+                        try (ResourceIterator<Node> variantPathogenicityIterator = graphDb.findNodes(VariantDatabase.getVariantPathogenicityLabel())){
 
-                            while (variantNodeIterator.hasNext()) {
-                                Node variantNode = variantNodeIterator.next();
+                            while (variantPathogenicityIterator.hasNext()) {
+                                Node variantPathogenicity = variantPathogenicityIterator.next();
 
-                                for (Relationship hasPathogenicityRelationship : variantNode.getRelationships(Direction.OUTGOING, VariantDatabase.getHasPathogenicityRelationship())) {
+                                if (UserEvent.getUserEventStatus(graphDb, variantPathogenicity) == UserEvent.UserEventStatus.PENDING_AUTH){
 
-                                    Node pathogenicityNode = hasPathogenicityRelationship.getEndNode();
-                                    UserAction.UserActionStatus status = UserAction.getUserActionStatus(graphDb, pathogenicityNode);
+                                    jg.writeStartObject();
 
-                                    //check no pending approvals
-                                    if (status.equals(UserAction.UserActionStatus.PENDING_APPROVAL) || status.equals(UserAction.UserActionStatus.PENDING_RETIRE)) {
+                                    writeVariantInformation(UserEvent.getSubjectNode(graphDb, variantPathogenicity), jg);
 
-                                        writeVariantInformation(variantNode, jg);
-                                        writeActionHistory(pathogenicityNode, jg);
-                                        jg.writeNumberField("classification", (Integer) pathogenicityNode.getProperty("classification"));
-
-                                    }
+                                    jg.writeEndObject();
 
                                 }
 
@@ -1415,6 +1377,7 @@ public class VariantDatabasePlugin
             return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
 
         } catch (Exception e) {
+            logger.error(e.getMessage());
             return Response
                     .status(Response.Status.INTERNAL_SERVER_ERROR)
                     .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
@@ -1446,8 +1409,8 @@ public class VariantDatabasePlugin
                         Node sampleNode = runInfoNode.getSingleRelationship(VariantDatabase.getHasAnalysisRelationship(), Direction.INCOMING).getStartNode();
 
                         //headers
-                        jg.writeRaw("#Variant Report v" + version + "\n");
-                        jg.writeRaw("#Created " + graphDb.getNodeById(parameters.userNodeId).getProperty("fullName") + " " + dateFormat.format(new Date()) + "\n");
+                        //jg.writeRaw("#Variant Report v" + version + "\n");
+                        //jg.writeRaw("#Created " + graphDb.getNodeById(parameters.userNodeId).getProperty("fullName") + " " + dateFormat.format(new Date()) + "\n");
                         jg.writeRaw("SampleId,WorklistId,Variant,Genotype,Quality,Occurrence,dbSNP,GERP++,PhyloP,PhastCons,");
 
                         //print pop freq header
@@ -1594,6 +1557,7 @@ public class VariantDatabasePlugin
 
             return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
         } catch (Exception e) {
+            logger.error(e.getMessage());
             return Response
                     .status(Response.Status.INTERNAL_SERVER_ERROR)
                     .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
@@ -1656,7 +1620,6 @@ public class VariantDatabasePlugin
         }
     }
     private int getGlobalVariantOccurrence(Node variantNode){
-
         int seen = 0;
 
         try (Transaction tx = graphDb.beginTx()) {
@@ -1825,26 +1788,6 @@ public class VariantDatabasePlugin
         }
 
         return false;
-    }
-    private UserAction.UserActionStatus getVariantPathogenicityPendingApprovalStatus(Node variantNode){
-
-        try (Transaction tx = graphDb.beginTx()) {
-
-            for (Relationship relationship : variantNode.getRelationships(Direction.OUTGOING, VariantDatabase.getHasPathogenicityRelationship())) {
-
-                Node pathogenicityNode = relationship.getEndNode();
-                UserAction.UserActionStatus status = UserAction.getUserActionStatus(graphDb, pathogenicityNode);
-
-                //check no pending approvals
-                if (status.equals(UserAction.UserActionStatus.PENDING_APPROVAL) || status.equals(UserAction.UserActionStatus.PENDING_RETIRE)) {
-                    return status;
-                }
-
-            }
-
-        }
-
-        return null;
     }
     private String getTranscriptBiotype(String biotypeRelName){
         if (biotypeRelName.length() > 12) {
@@ -2062,83 +2005,67 @@ public class VariantDatabasePlugin
         }
 
     }
-    private void writeActionHistory(Node actionNode, JsonGenerator jg) throws IOException {
+    private void writeEventHistory(Node subjectNode, JsonGenerator jg) throws IOException {
 
-        Node user;
-
-        jg.writeStartObject();
+        jg.writeArrayFieldStart("history");
 
         try (Transaction tx = graphDb.beginTx()) {
 
-            Relationship addedByRelationship = actionNode.getSingleRelationship(VariantDatabase.getAddedByRelationship(), Direction.OUTGOING);
-            Relationship addAuthorisedByRelationship = actionNode.getSingleRelationship(VariantDatabase.getAddAuthorisedByRelationship(), Direction.OUTGOING);
-            Relationship removedByRelationship = actionNode.getSingleRelationship(VariantDatabase.getRemovedByRelationship(), Direction.OUTGOING);
-            Relationship removeAuthorisedByRelationship = actionNode.getSingleRelationship(VariantDatabase.getRemoveAuthorisedByRelationship(), Direction.OUTGOING);
+            for (org.neo4j.graphdb.Path path : graphDb.traversalDescription().relationships(VariantDatabase.getHasUserEventRelationship(), Direction.OUTGOING).traverse(subjectNode)) {
+                for (Node eventNode : path.nodes()) {
 
-            if (addedByRelationship != null){
+                    jg.writeStartObject();
 
-                jg.writeObjectFieldStart("added");
+                    Relationship addedByRelationship = eventNode.getSingleRelationship(VariantDatabase.getAddedByRelationship(), Direction.OUTGOING);
+                    Relationship authorisedByRelationship = eventNode.getSingleRelationship(VariantDatabase.getAuthorisedByRelationship(), Direction.OUTGOING);
+                    Relationship rejectedByRelationship = eventNode.getSingleRelationship(VariantDatabase.getRejectedByRelationship(), Direction.OUTGOING);
 
-                user = addedByRelationship.getEndNode();
-                writeLiteUserInformation(user, jg);
+                    //event info
+                    if (eventNode.hasLabel(VariantDatabase.getVariantPathogenicityLabel())){
+                        jg.writeStringField("event", "Variant classification");
+                        jg.writeNumberField("value", (int) eventNode.getProperty("classification"));
+                    } else if (eventNode.hasLabel(VariantDatabase.getFeaturePreferenceLabel())){
+                        jg.writeStringField("event", "Preferred Transcript");
+                        jg.writeBooleanField("value", (boolean) eventNode.getProperty("preference"));
+                    }
 
-                if (addedByRelationship.hasProperty("date")) {
-                    jg.writeNumberField("date", (long) addedByRelationship.getProperty("date"));
+                    jg.writeObjectFieldStart("add");
+                    writeLiteUserInformation(addedByRelationship.getEndNode(), jg);
+                    jg.writeNumberField("date",(long) addedByRelationship.getProperty("date"));
+                    jg.writeEndObject();
+
+                    if (authorisedByRelationship == null && rejectedByRelationship == null){
+                        jg.writeStringField("status", UserEvent.UserEventStatus.PENDING_AUTH.toString());
+                    }
+
+                    if (authorisedByRelationship != null && rejectedByRelationship == null){
+                        jg.writeStringField("status", UserEvent.UserEventStatus.ACTIVE.toString());
+
+                        jg.writeObjectFieldStart("auth");
+                        writeLiteUserInformation(authorisedByRelationship.getEndNode(), jg);
+                        jg.writeNumberField("date",(long) authorisedByRelationship.getProperty("date"));
+                        jg.writeEndObject();
+
+                    }
+
+                    if (authorisedByRelationship == null && rejectedByRelationship != null){
+                        jg.writeStringField("status", UserEvent.UserEventStatus.REJECTED.toString());
+
+                        jg.writeObjectFieldStart("auth");
+                        writeLiteUserInformation(rejectedByRelationship.getEndNode(), jg);
+                        jg.writeNumberField("date",(long) rejectedByRelationship.getProperty("date"));
+                        jg.writeEndObject();
+
+                    }
+
+                    jg.writeEndObject();
+
                 }
-                if (addedByRelationship.hasProperty("evidence")) {
-                    jg.writeStringField("evidence", addedByRelationship.getProperty("evidence").toString());
-                }
-
-                jg.writeEndObject();
-
-            }
-
-            if (addAuthorisedByRelationship != null){
-                jg.writeObjectFieldStart("addedAuth");
-
-                user = addAuthorisedByRelationship.getEndNode();
-                writeLiteUserInformation(user, jg);
-
-                if (addAuthorisedByRelationship.hasProperty("date")) {
-                    jg.writeNumberField("date", (long) addAuthorisedByRelationship.getProperty("date"));
-                }
-
-                jg.writeEndObject();
-            }
-
-            if (removedByRelationship != null){
-                jg.writeObjectFieldStart("removed");
-
-                user = removedByRelationship.getEndNode();
-                writeLiteUserInformation(user, jg);
-
-                if (removedByRelationship.hasProperty("date")){
-                    jg.writeNumberField("date", (long) removedByRelationship.getProperty("date"));
-                }
-                if (removedByRelationship.hasProperty("evidence")){
-                    jg.writeStringField("evidence", removedByRelationship.getProperty("evidence").toString());
-                }
-
-                jg.writeEndObject();
-            }
-
-            if (removeAuthorisedByRelationship != null){
-                jg.writeObjectFieldStart("removedAuth");
-
-                user = removeAuthorisedByRelationship.getEndNode();
-                writeLiteUserInformation(user, jg);
-
-                if (removeAuthorisedByRelationship.hasProperty("date")){
-                    jg.writeNumberField("date", (long) removeAuthorisedByRelationship.getProperty("date"));
-                }
-
-                jg.writeEndObject();
             }
 
         }
 
-        jg.writeEndObject();
-
+        jg.writeEndArray();
     }
 
 }

@@ -18,7 +18,7 @@ public class Parameters {
     public Long[] includePanelNodes;
     public Long[] variantNodeIds;
     public Long panelNodeId;
-    public Long actionNodeId;
+    public Long eventNodeId;
     public Boolean addOrRemove;
     public String userId;
     public String password;
