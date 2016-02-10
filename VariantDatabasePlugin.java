@@ -21,8 +21,7 @@ import org.codehaus.jackson.JsonGenerator;
 import org.codehaus.jackson.map.ObjectMapper;
 import org.neo4j.graphdb.*;
 
-import org.neo4j.graphdb.traversal.TraversalDescription;
-import org.neo4j.graphdb.traversal.Uniqueness;
+import org.neo4j.graphdb.traversal.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -53,7 +52,7 @@ public class VariantDatabasePlugin
     }
 
     @POST
-    @Path("/diagnostic/returninputjson")
+    @Path("/diagnostic/return")
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
     public Response returnInputJson(final String json) {
@@ -63,7 +62,7 @@ public class VariantDatabasePlugin
     }
 
     @GET
-    @Path("/workflows/info")
+    @Path("/workflows/list")
     @Produces(MediaType.APPLICATION_JSON)
     public Response workflowsInfo() {
 
@@ -115,7 +114,7 @@ public class VariantDatabasePlugin
     }
 
     @GET
-    @Path("/analyses/info")
+    @Path("/analyses/list")
     @Produces(MediaType.APPLICATION_JSON)
     public Response analysesInfo() {
 
@@ -176,7 +175,7 @@ public class VariantDatabasePlugin
     }
 
     @GET
-    @Path("/panels/info/all")
+    @Path("/panels/list")
     @Produces(MediaType.APPLICATION_JSON)
     public Response panelsInfoAll() {
 
@@ -229,7 +228,7 @@ public class VariantDatabasePlugin
     }
 
     @POST
-    @Path("/panels/info/single")
+    @Path("/panels/info")
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
     public Response panelsInfoSingle(final String json) {
@@ -294,7 +293,6 @@ public class VariantDatabasePlugin
 
         try {
 
-            Date date = new Date();
             HashMap<String, Object> properties = new HashMap<>();
             Parameters parameters = objectMapper.readValue(json, Parameters.class);
 
@@ -306,11 +304,10 @@ public class VariantDatabasePlugin
                     //make panel node
                     properties.put("virtualPanelName", parameters.virtualPanelName);
                     Node virtualPanelNode = Neo4j.addNode(graphDb, VariantDatabase.getVirtualPanelLabel(), properties);
-                    properties.clear();
 
                     //link to user
                     Relationship designedByRelationship = virtualPanelNode.createRelationshipTo(userNode, VariantDatabase.getDesignedByRelationship());
-                    designedByRelationship.setProperty("date", date.getTime());
+                    designedByRelationship.setProperty("date", new Date().getTime());
 
                     //link to genes
                     for (String gene : parameters.virtualPanelList) {
@@ -469,24 +466,34 @@ public class VariantDatabasePlugin
         try {
 
             Node variantNode, userNode;
+            HashMap<String, Object> properties = new HashMap<>();
             Parameters parameters = objectMapper.readValue(json, Parameters.class);
 
-            //check classificaiton is in range
+            //check classification is in range
             if (parameters.classification < 1 || parameters.classification > 5){
                 throw new IllegalArgumentException("Unknown classification");
             }
 
-            //properties
-            HashMap<String, Object> properties = new HashMap<>();
-            properties.put("classification", parameters.classification);
-            properties.put("evidence", parameters.evidence);
-
+            //get nodes
             try (Transaction tx = graphDb.beginTx()) {
                 variantNode = graphDb.getNodeById(parameters.variantNodeId);
                 userNode = graphDb.getNodeById(parameters.userNodeId);
             }
 
-            addUserEvent(getLastUserEventNode(variantNode), VariantDatabase.getVariantPathogenicityLabel(), properties, userNode);
+            //check variant does not already have outstanding auths
+            Node lastEventNode = getLastUserEventNode(variantNode);
+            UserEventStatus status = getUserEventStatus(lastEventNode);
+
+            if (status == UserEventStatus.PENDING_AUTH){
+                throw new IllegalArgumentException("Cannot add pathogenicity. Auth pending.");
+            }
+
+            //add properties
+            properties.put("classification", parameters.classification);
+            if (!parameters.evidence.equals("")) properties.put("evidence", parameters.evidence);
+
+            //add event
+            addUserEvent(lastEventNode, VariantDatabase.getVariantPathogenicityLabel(), properties, userNode);
 
             return Response
                     .status(Response.Status.OK)
@@ -564,6 +571,75 @@ public class VariantDatabasePlugin
                     .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
                     .build();
         }
+    }
+
+    @GET
+    @Path("/variant/pendingauth")
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response variantPendingAuth() {
+
+        try {
+
+            StreamingOutput stream = new StreamingOutput() {
+
+                @Override
+                public void write(OutputStream os) throws IOException, WebApplicationException {
+
+                    JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
+
+                    jg.writeStartArray();
+
+                    try (Transaction tx = graphDb.beginTx()) {
+                        try (ResourceIterator<Node> variantPathogenicityIterator = graphDb.findNodes(VariantDatabase.getVariantPathogenicityLabel())){
+
+                            while (variantPathogenicityIterator.hasNext()) {
+                                Node variantPathogenicity = variantPathogenicityIterator.next();
+
+                                if (getUserEventStatus(variantPathogenicity) == UserEventStatus.PENDING_AUTH){
+
+                                    Relationship addedByRelationship = variantPathogenicity.getSingleRelationship(VariantDatabase.getAddedByRelationship(), Direction.OUTGOING);
+
+                                    jg.writeStartObject();
+
+                                    jg.writeNumberField("eventNodeId", variantPathogenicity.getId());
+                                    jg.writeStringField("event", "Variant classification");
+                                    jg.writeNumberField("value", (int) variantPathogenicity.getProperty("classification"));
+                                    if (variantPathogenicity.hasProperty("evidence")) jg.writeStringField("evidence", variantPathogenicity.getProperty("evidence").toString());
+
+                                    jg.writeObjectFieldStart("add");
+                                    writeLiteUserInformation(addedByRelationship.getEndNode(), jg);
+                                    jg.writeNumberField("date",(long) addedByRelationship.getProperty("date"));
+                                    jg.writeEndObject();
+
+                                    writeVariantInformation(getSubjectNodeFromEventNode(variantPathogenicity), jg);
+                                    jg.writeEndObject();
+
+                                }
+
+                            }
+
+                        }
+                    }
+
+                    jg.writeEndArray();
+
+                    jg.flush();
+                    jg.close();
+
+                }
+
+            };
+
+            return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+
+        } catch (Exception e) {
+            logger.error(e.getMessage());
+            return Response
+                    .status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        }
+
     }
 
     @POST
@@ -745,10 +821,10 @@ public class VariantDatabasePlugin
     }
 
     @POST
-    @Path("/user/changepassword")
+    @Path("/user/updatepassword")
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
-    public Response userChangePassword(final String json) {
+    public Response userUpdatePassword(final String json) {
 
         try {
 
@@ -778,19 +854,18 @@ public class VariantDatabasePlugin
     public Response userAdd(final String json) {
 
         try {
-
             User user = objectMapper.readValue(json, User.class);
-            HashMap<String, Object> properties = new HashMap<>();
-
-            properties.put("fullName", user.fullName);
-            properties.put("password", user.password);
-            properties.put("jobTitle", user.jobTitle);
-            properties.put("userId", user.userId);
-            properties.put("contactNumber", user.contactNumber);
-            properties.put("admin", user.admin);
 
             try (Transaction tx = graphDb.beginTx()) {
-                Neo4j.addNode(graphDb, VariantDatabase.getUserLabel(), properties);
+                Node newUserNode = graphDb.createNode(VariantDatabase.getUserLabel());
+
+                newUserNode.setProperty("fullName", user.fullName);
+                newUserNode.setProperty("password", user.password);
+                newUserNode.setProperty("jobTitle", user.jobTitle);
+                newUserNode.setProperty("userId", user.userId);
+                newUserNode.setProperty("contactNumber", user.contactNumber);
+                newUserNode.setProperty("admin", user.admin);
+
                 tx.success();
             }
 
@@ -830,64 +905,6 @@ public class VariantDatabasePlugin
             return Response
                     .status(Response.Status.OK)
                     .build();
-
-        } catch (Exception e) {
-            logger.error(e.getMessage());
-            return Response
-                    .status(Response.Status.INTERNAL_SERVER_ERROR)
-                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
-                    .build();
-        }
-
-    }
-
-    @GET
-    @Path("/admin/pendingauth")
-    @Produces(MediaType.APPLICATION_JSON)
-    public Response adminPendingAuth() {
-
-        try {
-
-            StreamingOutput stream = new StreamingOutput() {
-
-                @Override
-                public void write(OutputStream os) throws IOException, WebApplicationException {
-
-                    JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
-
-                    jg.writeStartArray();
-
-                    try (Transaction tx = graphDb.beginTx()) {
-                        try (ResourceIterator<Node> variantPathogenicityIterator = graphDb.findNodes(VariantDatabase.getVariantPathogenicityLabel())){
-
-                            while (variantPathogenicityIterator.hasNext()) {
-                                Node variantPathogenicity = variantPathogenicityIterator.next();
-
-                                if (getUserEventStatus(variantPathogenicity) == UserEventStatus.PENDING_AUTH){
-
-                                    jg.writeStartObject();
-
-                                    writeVariantInformation(getSubjectNode(variantPathogenicity), jg);
-
-                                    jg.writeEndObject();
-
-                                }
-
-                            }
-
-                        }
-                    }
-
-                    jg.writeEndArray();
-
-                    jg.flush();
-                    jg.close();
-
-                }
-
-            };
-
-            return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
 
         } catch (Exception e) {
             logger.error(e.getMessage());
@@ -1809,49 +1826,51 @@ public class VariantDatabasePlugin
     }
 
     /*User event functions*/
-    private Node getSubjectNode(Node eventNode){
+    private Node getSubjectNodeFromEventNode(Node eventNode){
+
         Node subjectNode = null;
+        org.neo4j.graphdb.Path longestPath = null;
 
         try (Transaction tx = graphDb.beginTx()) {
-            for (org.neo4j.graphdb.Path path : graphDb.traversalDescription().relationships(VariantDatabase.getHasUserEventRelationship(), Direction.INCOMING).traverse(eventNode)) {
-                for (Node previousNode : path.nodes()) {
-                    subjectNode = previousNode;
-                }
+            for (org.neo4j.graphdb.Path path : graphDb.traversalDescription()
+                    .uniqueness(Uniqueness.RELATIONSHIP_GLOBAL)
+                    .uniqueness(Uniqueness.NODE_GLOBAL)
+                    .relationships(VariantDatabase.getHasUserEventRelationship(), Direction.INCOMING)
+                    .traverse(eventNode)) {
+                longestPath = path;
             }
+
+            //loop over nodes in this path
+            for (Node node : longestPath.nodes()) {
+                subjectNode = node;
+            }
+
         }
 
         return subjectNode;
     }
     private Node getLastUserEventNode(Node subjectNode){
 
+        Node lastEventNode = null;
+        org.neo4j.graphdb.Path longestPath = null;
+
         try (Transaction tx = graphDb.beginTx()) {
-            long lastEventNodeId = subjectNode.getId();
-
-            TraversalDescription traversalDescription = graphDb.traversalDescription()
-                    .uniqueness(Uniqueness.NODE_GLOBAL)
+            for (org.neo4j.graphdb.Path path : graphDb.traversalDescription()
                     .uniqueness(Uniqueness.RELATIONSHIP_GLOBAL)
-                    .relationships(VariantDatabase.getHasUserEventRelationship(), Direction.OUTGOING);
-
-            for (org.neo4j.graphdb.Path path : traversalDescription.traverse(subjectNode)) {
-                for (Node eventNode : path.nodes()) {
-                    if (eventNode.getId() == subjectNode.getId()) continue;
-
-                    //get event status
-                    UserEventStatus status = getUserEventStatus(eventNode);
-
-                    if (status == null) {
-                        throw new NullPointerException("Event has null status");
-                    } else if (status == UserEventStatus.PENDING_AUTH) {
-                        throw new IllegalArgumentException("Event is pending authorisation. Cannot add new event");
-                    }
-
-                    lastEventNodeId = eventNode.getId();
-                }
+                    .uniqueness(Uniqueness.NODE_GLOBAL)
+                    .relationships(VariantDatabase.getHasUserEventRelationship(), Direction.OUTGOING)
+                    .traverse(subjectNode)) {
+                longestPath = path;
             }
 
-            return graphDb.getNodeById(lastEventNodeId);
+            //loop over nodes in this path
+            for (Node node : longestPath.nodes()) {
+                lastEventNode = node;
+            }
+
         }
 
+        return lastEventNode;
     }
     private void addUserEvent(Node lastUserEventNode, Label newEventNodeLabel, HashMap<String, Object> properties, Node userNode) {
 
@@ -2103,13 +2122,18 @@ public class VariantDatabasePlugin
 
     }
     private void writeEventHistory(Node subjectNode, JsonGenerator jg) throws IOException {
-
         jg.writeArrayFieldStart("history");
 
         try (Transaction tx = graphDb.beginTx()) {
 
-            for (org.neo4j.graphdb.Path path : graphDb.traversalDescription().relationships(VariantDatabase.getHasUserEventRelationship(), Direction.OUTGOING).traverse(subjectNode)) {
+            TraversalDescription traversalDescription = graphDb.traversalDescription()
+                    .uniqueness(Uniqueness.NODE_GLOBAL)
+                    .uniqueness(Uniqueness.RELATIONSHIP_GLOBAL)
+                    .relationships(VariantDatabase.getHasUserEventRelationship(), Direction.OUTGOING);
+
+            for (org.neo4j.graphdb.Path path : traversalDescription.traverse(subjectNode)) {
                 for (Node eventNode : path.nodes()) {
+                    if (eventNode.getId() == subjectNode.getId()) continue;
 
                     jg.writeStartObject();
 
@@ -2125,6 +2149,8 @@ public class VariantDatabasePlugin
                         jg.writeStringField("event", "Preferred Transcript");
                         jg.writeBooleanField("value", (boolean) eventNode.getProperty("preference"));
                     }
+
+                    if (eventNode.hasProperty("evidence")) jg.writeStringField("evidence", eventNode.getProperty("evidence").toString());
 
                     jg.writeObjectFieldStart("add");
                     writeLiteUserInformation(addedByRelationship.getEndNode(), jg);
