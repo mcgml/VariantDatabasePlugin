@@ -21,6 +21,8 @@ import org.codehaus.jackson.JsonGenerator;
 import org.codehaus.jackson.map.ObjectMapper;
 import org.neo4j.graphdb.*;
 
+import org.neo4j.graphdb.traversal.TraversalDescription;
+import org.neo4j.graphdb.traversal.Uniqueness;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -29,7 +31,9 @@ public class VariantDatabasePlugin
 {
     private static final Logger logger = LoggerFactory.getLogger(VariantDatabasePlugin.class);
 
-    private double version = 0.6;
+    private enum UserEventStatus {
+        PENDING_AUTH, ACTIVE, REJECTED
+    }
     private GraphDatabaseService graphDb;
     private final ObjectMapper objectMapper;
     private Method[] methods;
@@ -48,21 +52,20 @@ public class VariantDatabasePlugin
         String description();
     }
 
-    /*diagnostic*/
     @POST
-    @Path("/returninputjson")
+    @Path("/diagnostic/returninputjson")
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
     public Response returnInputJson(final String json) {
+        logger.debug(json);
         return Response.status( Response.Status.OK ).entity(
                 (json).getBytes( Charset.forName("UTF-8") ) ).build();
     }
 
-    /*info*/
     @GET
-    @Path("/workflows")
+    @Path("/workflows/info")
     @Produces(MediaType.APPLICATION_JSON)
-    public Response getWorkflows() {
+    public Response workflowsInfo() {
 
         try {
 
@@ -112,9 +115,9 @@ public class VariantDatabasePlugin
     }
 
     @GET
-    @Path("/analyses")
+    @Path("/analyses/info")
     @Produces(MediaType.APPLICATION_JSON)
-    public Response getAnalyses() {
+    public Response analysesInfo() {
 
         try {
 
@@ -173,9 +176,9 @@ public class VariantDatabasePlugin
     }
 
     @GET
-    @Path("/panels")
+    @Path("/panels/info/all")
     @Produces(MediaType.APPLICATION_JSON)
-    public Response getVirtualPanels() {
+    public Response panelsInfoAll() {
 
         try {
 
@@ -226,10 +229,124 @@ public class VariantDatabasePlugin
     }
 
     @POST
-    @Path("/variantinformation")
+    @Path("/panels/info/single")
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
-    public Response getVariantInformation(final String json) {
+    public Response panelsInfoSingle(final String json) {
+
+        try {
+            StreamingOutput stream = new StreamingOutput() {
+
+                @Override
+                public void write(OutputStream os) throws IOException, WebApplicationException {
+
+                    JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
+                    Parameters parameters = objectMapper.readValue(json, Parameters.class);
+
+                    jg.writeStartObject();
+
+                    try (Transaction tx = graphDb.beginTx()) {
+                        Node panelNode = graphDb.getNodeById(parameters.panelNodeId);
+
+                        writeVirtualPanelInformation(panelNode, jg);
+
+                        jg.writeArrayFieldStart("symbols");
+
+                        for (Relationship containsSymbol : panelNode.getRelationships(Direction.OUTGOING, VariantDatabase.getContainsSymbolRelationship())){
+                            Node symbolNode = containsSymbol.getEndNode();
+
+                            if (symbolNode.hasLabel(VariantDatabase.getSymbolLabel())){
+
+                                jg.writeStartObject();
+                                writeSymbolInformation(symbolNode, jg);
+                                jg.writeEndObject();
+
+                            }
+
+                        }
+
+                        jg.writeEndArray();
+                    }
+
+                    jg.writeEndObject();
+
+                    jg.flush();
+                    jg.close();
+                }
+
+            };
+
+            return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+        } catch (Exception e) {
+            logger.error(e.getMessage());
+            return Response
+                    .status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        }
+    }
+
+    @POST
+    @Path("/panels/add")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response panelsAdd(final String json) {
+
+        try {
+
+            Date date = new Date();
+            HashMap<String, Object> properties = new HashMap<>();
+            Parameters parameters = objectMapper.readValue(json, Parameters.class);
+
+            try (Transaction tx = graphDb.beginTx()) {
+                Node userNode = graphDb.getNodeById(parameters.userNodeId);
+
+                if (userNode.hasLabel(VariantDatabase.getUserLabel())) {
+
+                    //make panel node
+                    properties.put("virtualPanelName", parameters.virtualPanelName);
+                    Node virtualPanelNode = Neo4j.addNode(graphDb, VariantDatabase.getVirtualPanelLabel(), properties);
+                    properties.clear();
+
+                    //link to user
+                    Relationship designedByRelationship = virtualPanelNode.createRelationshipTo(userNode, VariantDatabase.getDesignedByRelationship());
+                    designedByRelationship.setProperty("date", date.getTime());
+
+                    //link to genes
+                    for (String gene : parameters.virtualPanelList) {
+
+                        //match or create gene
+                        Node geneNode = Neo4j.matchOrCreateUniqueNode(graphDb, VariantDatabase.getSymbolLabel(), "symbolId", gene);
+
+                        //link to virtual panel
+                        virtualPanelNode.createRelationshipTo(geneNode, VariantDatabase.getContainsSymbolRelationship());
+                    }
+
+
+                }
+
+                tx.success();
+            }
+
+            return Response
+                    .status(Response.Status.OK)
+                    .build();
+
+        } catch (Exception e) {
+            logger.error(e.getMessage());
+            return Response
+                    .status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        }
+
+    }
+
+    @POST
+    @Path("/variant/info")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response variantInfo(final String json) {
 
         try {
 
@@ -283,62 +400,10 @@ public class VariantDatabasePlugin
     }
 
     @POST
-    @Path("/featureinformation")
+    @Path("/variant/counts")
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
-    public Response getFeatureInformation(final String json) {
-
-        try {
-
-            StreamingOutput stream = new StreamingOutput() {
-
-                @Override
-                public void write(OutputStream os) throws IOException, WebApplicationException {
-
-                    JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
-                    Parameters parameters = objectMapper.readValue(json, Parameters.class);
-                    Node featureNode = null;
-
-                    jg.writeStartObject();
-
-                    try (Transaction tx = graphDb.beginTx()) {
-
-                        try (ResourceIterator<Node> features = graphDb.findNodes(VariantDatabase.getFeatureLabel(), "featureId", parameters.featureId)) {
-                            while (features.hasNext()) {
-                                featureNode = features.next();
-                            }
-                            features.close();
-                        }
-
-                        writeFeatureInformation(featureNode, jg);
-
-                    }
-
-                    jg.writeEndObject();
-
-                    jg.flush();
-                    jg.close();
-                }
-
-            };
-
-            return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
-
-        } catch (Exception e) {
-            logger.error(e.getMessage());
-            return Response
-                    .status(Response.Status.INTERNAL_SERVER_ERROR)
-                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
-                    .build();
-        }
-
-    }
-
-    @POST
-    @Path("/variantobservations")
-    @Consumes(MediaType.APPLICATION_JSON)
-    @Produces(MediaType.APPLICATION_JSON)
-    public Response getVariantObservations(final String json) {
+    public Response variantCounts(final String json) {
 
         try {
 
@@ -396,10 +461,168 @@ public class VariantDatabasePlugin
     }
 
     @POST
-    @Path("/functionalannotation")
+    @Path("/variant/addpathogenicity")
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
-    public Response getFunctionalAnnotation(final String json) {
+    public Response variantAddPathogenicity(final String json) {
+
+        try {
+
+            Node variantNode, userNode;
+            Parameters parameters = objectMapper.readValue(json, Parameters.class);
+
+            //check classificaiton is in range
+            if (parameters.classification < 1 || parameters.classification > 5){
+                throw new IllegalArgumentException("Unknown classification");
+            }
+
+            //properties
+            HashMap<String, Object> properties = new HashMap<>();
+            properties.put("classification", parameters.classification);
+            properties.put("evidence", parameters.evidence);
+
+            try (Transaction tx = graphDb.beginTx()) {
+                variantNode = graphDb.getNodeById(parameters.variantNodeId);
+                userNode = graphDb.getNodeById(parameters.userNodeId);
+            }
+
+            addUserEvent(getLastUserEventNode(variantNode), VariantDatabase.getVariantPathogenicityLabel(), properties, userNode);
+
+            return Response
+                    .status(Response.Status.OK)
+                    .build();
+
+        } catch (IllegalArgumentException e) {
+            logger.error(e.getMessage());
+            return Response
+                    .status(Response.Status.BAD_REQUEST)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        } catch (Exception e) {
+            logger.error(e.getMessage());
+            return Response
+                    .status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        }
+
+    }
+
+    @POST
+    @Path("/variant/filter")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response variantFilter(final String json) {
+
+        try{
+            StreamingOutput stream = new StreamingOutput() {
+
+                @Override
+                public void write(OutputStream os) throws IOException {
+
+                    Parameters parameters = objectMapper.readValue(json, Parameters.class);
+                    JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
+
+                    HashSet<Long> excludeRunInfoNodes = new HashSet<>(Arrays.asList(parameters.excludeRunInfoNodes));
+                    HashSet<Long> includePanelNodes = new HashSet<>(Arrays.asList(parameters.includePanelNodes));
+                    Node runInfoNode;
+
+                    try (Transaction tx = graphDb.beginTx()) {
+                        runInfoNode = graphDb.getNodeById(parameters.runInfoNodeId);
+                    }
+
+                    //exec workflow
+                    switch (parameters.workflowName) {
+                        case "Autosomal Dominant Workflow v1":
+                            runAutosomalDominantWorkflowv1(jg, excludeRunInfoNodes, includePanelNodes, runInfoNode);
+                            break;
+                        case "Rare Homozygous Workflow v1":
+                            runRareHomozygousWorkflowv1(jg, excludeRunInfoNodes, includePanelNodes, runInfoNode);
+                            break;
+                        case "Autosomal Recessive Workflow v1":
+                            runAutosomalRecessiveWorkflowv1(jg, excludeRunInfoNodes, includePanelNodes, runInfoNode);
+                            break;
+                        case "X Linked Workflow v1":
+                            runXLinkedWorkflowv1(jg, excludeRunInfoNodes, includePanelNodes, runInfoNode);
+                            break;
+                        default:
+                            throw new IllegalArgumentException("Unknown workflow");
+                    }
+
+                    jg.flush();
+                    jg.close();
+
+                }
+
+            };
+
+            return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+        } catch (Exception e) {
+            logger.error(e.getMessage());
+            return Response
+                    .status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        }
+    }
+
+    @POST
+    @Path("/feature/info")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response featureInfo(final String json) {
+
+        try {
+
+            StreamingOutput stream = new StreamingOutput() {
+
+                @Override
+                public void write(OutputStream os) throws IOException, WebApplicationException {
+
+                    JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
+                    Parameters parameters = objectMapper.readValue(json, Parameters.class);
+                    Node featureNode = null;
+
+                    jg.writeStartObject();
+
+                    try (Transaction tx = graphDb.beginTx()) {
+
+                        try (ResourceIterator<Node> features = graphDb.findNodes(VariantDatabase.getFeatureLabel(), "featureId", parameters.featureId)) {
+                            while (features.hasNext()) {
+                                featureNode = features.next();
+                            }
+                            features.close();
+                        }
+
+                        writeFeatureInformation(featureNode, jg);
+
+                    }
+
+                    jg.writeEndObject();
+
+                    jg.flush();
+                    jg.close();
+                }
+
+            };
+
+            return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+
+        } catch (Exception e) {
+            logger.error(e.getMessage());
+            return Response
+                    .status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        }
+
+    }
+
+    @POST
+    @Path("/annotation/info")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response annotationInfo(final String json) {
 
         try {
 
@@ -472,68 +695,10 @@ public class VariantDatabasePlugin
     }
 
     @POST
-    @Path("/getvirtualpanel")
+    @Path("/user/info")
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
-    public Response getVirtualPanel(final String json) {
-
-        try {
-            StreamingOutput stream = new StreamingOutput() {
-
-                @Override
-                public void write(OutputStream os) throws IOException, WebApplicationException {
-
-                    JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
-                    Parameters parameters = objectMapper.readValue(json, Parameters.class);
-
-                    jg.writeStartObject();
-
-                    try (Transaction tx = graphDb.beginTx()) {
-                        Node panelNode = graphDb.getNodeById(parameters.panelNodeId);
-
-                        writeVirtualPanelInformation(panelNode, jg);
-
-                        jg.writeArrayFieldStart("symbols");
-
-                        for (Relationship containsSymbol : panelNode.getRelationships(Direction.OUTGOING, VariantDatabase.getContainsSymbolRelationship())){
-                            Node symbolNode = containsSymbol.getEndNode();
-
-                            if (symbolNode.hasLabel(VariantDatabase.getSymbolLabel())){
-
-                                jg.writeStartObject();
-                                writeSymbolInformation(symbolNode, jg);
-                                jg.writeEndObject();
-
-                            }
-
-                        }
-
-                        jg.writeEndArray();
-                    }
-
-                    jg.writeEndObject();
-
-                    jg.flush();
-                    jg.close();
-                }
-
-            };
-
-            return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
-        } catch (Exception e) {
-            logger.error(e.getMessage());
-            return Response
-                    .status(Response.Status.INTERNAL_SERVER_ERROR)
-                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
-                    .build();
-        }
-    }
-
-    @POST
-    @Path("/getuserinformation")
-    @Consumes(MediaType.APPLICATION_JSON)
-    @Produces(MediaType.APPLICATION_JSON)
-    public Response getUserInformation(final String json) {
+    public Response userInfo(final String json) {
 
         try{
 
@@ -579,51 +744,326 @@ public class VariantDatabasePlugin
         }
     }
 
-    /*workflows*/
     @POST
-    @Path("/getfilteredvariants")
+    @Path("/user/changepassword")
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
-    public Response getFilteredVariants(final String json) {
+    public Response userChangePassword(final String json) {
 
-        try{
+        try {
+
+            Parameters parameters = objectMapper.readValue(json, Parameters.class);
+
+            try (Transaction tx = graphDb.beginTx()) {
+                Node userNode = graphDb.getNodeById(parameters.userNodeId);
+                userNode.setProperty("password", parameters.password);
+                tx.success();
+            }
+
+            return Response.status(Response.Status.OK).build();
+
+        } catch (Exception e) {
+            logger.error(e.getMessage());
+            return Response
+                    .status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        }
+    }
+
+    @POST
+    @Path("/user/add")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response userAdd(final String json) {
+
+        try {
+
+            User user = objectMapper.readValue(json, User.class);
+            HashMap<String, Object> properties = new HashMap<>();
+
+            properties.put("fullName", user.fullName);
+            properties.put("password", user.password);
+            properties.put("jobTitle", user.jobTitle);
+            properties.put("userId", user.userId);
+            properties.put("contactNumber", user.contactNumber);
+            properties.put("admin", user.admin);
+
+            try (Transaction tx = graphDb.beginTx()) {
+                Neo4j.addNode(graphDb, VariantDatabase.getUserLabel(), properties);
+                tx.success();
+            }
+
+            return Response.status(Response.Status.OK).build();
+        } catch (Exception e) {
+            logger.error(e.getMessage());
+            return Response
+                    .status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        }
+
+    }
+
+    @POST
+    @Path("/admin/authevent")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response adminAuthEvent(final String json) {
+
+        try {
+
+            Parameters parameters = objectMapper.readValue(json, Parameters.class);
+            Node eventNode, userNode;
+
+            try (Transaction tx = graphDb.beginTx()) {
+                eventNode = graphDb.getNodeById(parameters.eventNodeId);
+                userNode = graphDb.getNodeById(parameters.userNodeId);
+            }
+
+            if (getUserEventStatus(eventNode) != UserEventStatus.PENDING_AUTH){
+                throw new IllegalArgumentException("Event has no pending authorisation");
+            }
+
+            authUserEvent(eventNode, userNode, parameters.addOrRemove);
+
+            return Response
+                    .status(Response.Status.OK)
+                    .build();
+
+        } catch (Exception e) {
+            logger.error(e.getMessage());
+            return Response
+                    .status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        }
+
+    }
+
+    @GET
+    @Path("/admin/pendingauth")
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response adminPendingAuth() {
+
+        try {
+
             StreamingOutput stream = new StreamingOutput() {
 
                 @Override
-                public void write(OutputStream os) throws IOException {
+                public void write(OutputStream os) throws IOException, WebApplicationException {
 
-                    Parameters parameters = objectMapper.readValue(json, Parameters.class);
                     JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
 
-                    HashSet<Long> excludeRunInfoNodes = new HashSet<>(Arrays.asList(parameters.excludeRunInfoNodes));
-                    HashSet<Long> includePanelNodes = new HashSet<>(Arrays.asList(parameters.includePanelNodes));
-                    Node runInfoNode;
+                    jg.writeStartArray();
 
                     try (Transaction tx = graphDb.beginTx()) {
-                        runInfoNode = graphDb.getNodeById(parameters.runInfoNodeId);
+                        try (ResourceIterator<Node> variantPathogenicityIterator = graphDb.findNodes(VariantDatabase.getVariantPathogenicityLabel())){
+
+                            while (variantPathogenicityIterator.hasNext()) {
+                                Node variantPathogenicity = variantPathogenicityIterator.next();
+
+                                if (getUserEventStatus(variantPathogenicity) == UserEventStatus.PENDING_AUTH){
+
+                                    jg.writeStartObject();
+
+                                    writeVariantInformation(getSubjectNode(variantPathogenicity), jg);
+
+                                    jg.writeEndObject();
+
+                                }
+
+                            }
+
+                        }
                     }
 
-                    //exec workflow
-                    switch (parameters.workflowName) {
-                        case "Autosomal Dominant Workflow v1":
-                            runAutosomalDominantWorkflowv1(jg, excludeRunInfoNodes, includePanelNodes, runInfoNode);
-                            break;
-                        case "Rare Homozygous Workflow v1":
-                            runRareHomozygousWorkflowv1(jg, excludeRunInfoNodes, includePanelNodes, runInfoNode);
-                            break;
-                        case "Autosomal Recessive Workflow v1":
-                            runAutosomalRecessiveWorkflowv1(jg, excludeRunInfoNodes, includePanelNodes, runInfoNode);
-                            break;
-                        case "X Linked Workflow v1":
-                            runXLinkedWorkflowv1(jg, excludeRunInfoNodes, includePanelNodes, runInfoNode);
-                            break;
-                        default:
-                            throw new IllegalArgumentException("Unknown workflow");
-                    }
+                    jg.writeEndArray();
 
                     jg.flush();
                     jg.close();
 
+                }
+
+            };
+
+            return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+
+        } catch (Exception e) {
+            logger.error(e.getMessage());
+            return Response
+                    .status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        }
+
+    }
+
+    @POST
+    @Path("/report")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response report(final String json) {
+
+        try {
+            StreamingOutput stream = new StreamingOutput() {
+
+                @Override
+                public void write(OutputStream os) throws IOException, WebApplicationException {
+
+                    DateFormat dateFormat = new SimpleDateFormat("dd/MM/yy HH:mm:ss");
+                    JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
+                    Parameters parameters = objectMapper.readValue(json, Parameters.class);
+                    float maxAf;
+
+                    try (Transaction tx = graphDb.beginTx()) {
+
+                        Node runInfoNode = graphDb.getNodeById(parameters.runInfoNodeId);
+                        Node sampleNode = runInfoNode.getSingleRelationship(VariantDatabase.getHasAnalysisRelationship(), Direction.INCOMING).getStartNode();
+
+                        //headers
+                        //jg.writeRaw("#Variant Report v" + version + "\n");
+                        //jg.writeRaw("#Created " + graphDb.getNodeById(parameters.userNodeId).getProperty("fullName") + " " + dateFormat.format(new Date()) + "\n");
+                        jg.writeRaw("SampleId,WorklistId,Variant,Genotype,Quality,Occurrence,dbSNP,GERP++,PhyloP,PhastCons,");
+
+                        //print pop freq header
+                        for (VariantDatabase.kGPhase3Population population : VariantDatabase.kGPhase3Population.values()) {
+                            jg.writeRaw("1KG_" + population.toString() + ",");
+                        }
+                        jg.writeRaw("Max_1KG,");
+                        for (VariantDatabase.exacPopulation population : VariantDatabase.exacPopulation.values()) {
+                            jg.writeRaw("ExAC_" + population.toString() + ",");
+                        }
+                        jg.writeRaw("Max_ExAC,");
+
+                        jg.writeRaw("Gene,Transcript,TranscriptType,TranscriptBiotype,CanonicalTranscript,Consequence,Severe,HGVSc,HGVSp,Location,SIFT,PolyPhen,Codons\n");
+
+                        //loop over variants node ids
+                        for (long variantNodeId : parameters.variantNodeIds){
+                            Node variantNode = graphDb.getNodeById(variantNodeId);
+
+                            //loop over selected variants
+                            for (Relationship relationship : variantNode.getRelationships(Direction.INCOMING)){
+                                if (relationship.getStartNode().getId() == parameters.runInfoNodeId){
+
+                                    for (Relationship consequenceRel : variantNode.getRelationships(Direction.OUTGOING)) {
+                                        Node annotationNode = consequenceRel.getEndNode();
+
+                                        if (annotationNode.hasLabel(VariantDatabase.getAnnotationLabel())){
+
+                                            for (Relationship inFeatureRel : annotationNode.getRelationships(Direction.OUTGOING, VariantDatabase.getInFeatureRelationship())) {
+                                                Node featureNode = inFeatureRel.getEndNode();
+
+                                                if (featureNode.hasLabel(VariantDatabase.getFeatureLabel())){
+
+                                                    for (Relationship biotypeRel : featureNode.getRelationships(Direction.INCOMING)) {
+                                                        Node symbolNode = biotypeRel.getStartNode();
+
+                                                        if (symbolNode.hasLabel(VariantDatabase.getSymbolLabel())){
+
+                                                            //sample
+                                                            if (sampleNode.hasProperty("sampleId")) jg.writeRaw(sampleNode.getProperty("sampleId").toString() + ","); else jg.writeRaw(",");
+                                                            if (runInfoNode.hasProperty("worklistId")) jg.writeRaw(runInfoNode.getProperty("worklistId").toString() + ","); else jg.writeRaw(",");
+
+                                                            //variant
+                                                            if (variantNode.hasProperty("variantId")) jg.writeRaw(variantNode.getProperty("variantId").toString() + ","); else jg.writeRaw(",");
+                                                            jg.writeRaw(getVariantInheritance(relationship.getType().name()) + ",");
+                                                            if (relationship.hasProperty("quality")) jg.writeRaw(relationship.getProperty("quality").toString() + ","); else jg.writeRaw(",");
+                                                            jg.writeRaw(getGlobalVariantOccurrence(variantNode) + ",");
+                                                            if (variantNode.hasProperty("dbSnpId")) jg.writeRaw(variantNode.getProperty("dbSnpId").toString() + ","); else jg.writeRaw(",");
+                                                            if (variantNode.hasProperty("gerp")) jg.writeRaw(variantNode.getProperty("gerp").toString() + ","); else jg.writeRaw(",");
+                                                            if (variantNode.hasProperty("phyloP")) jg.writeRaw(variantNode.getProperty("phyloP").toString() + ","); else jg.writeRaw(",");
+                                                            if (variantNode.hasProperty("phastCons")) jg.writeRaw(variantNode.getProperty("phastCons").toString() + ","); else jg.writeRaw(",");
+
+                                                            //1kg
+                                                            maxAf = -1f;
+                                                            for (VariantDatabase.kGPhase3Population population : VariantDatabase.kGPhase3Population.values()) {
+                                                                if (variantNode.hasProperty("kGPhase3" + population.toString() + "Af")){
+                                                                    jg.writeRaw(variantNode.getProperty("kGPhase3" + population.toString() + "Af").toString() + ",");
+
+                                                                    float tmp = (float) variantNode.getProperty("kGPhase3" + population.toString() + "Af");
+                                                                    if (tmp > maxAf) maxAf = tmp;
+
+                                                                } else {
+                                                                    jg.writeRaw(",");
+                                                                }
+                                                            }
+                                                            if (maxAf != -1f){
+                                                                jg.writeRaw(Float.toString(maxAf) + ",");
+                                                            } else {
+                                                                jg.writeRaw(",");
+                                                            }
+
+                                                            //ExAC
+                                                            maxAf = -1f;
+                                                            for (VariantDatabase.exacPopulation population : VariantDatabase.exacPopulation.values()) {
+                                                                if (variantNode.hasProperty("exac" + population.toString() + "Af")){
+                                                                    jg.writeRaw(variantNode.getProperty("exac" + population.toString() + "Af").toString() + ",");
+
+                                                                    float tmp = (float) variantNode.getProperty("exac" + population.toString() + "Af");
+                                                                    if (tmp > maxAf) maxAf = tmp;
+
+                                                                } else {
+                                                                    jg.writeRaw(",");
+                                                                }
+                                                            }
+                                                            if (maxAf != -1f){
+                                                                jg.writeRaw(Float.toString(maxAf) + ",");
+                                                            } else {
+                                                                jg.writeRaw(",");
+                                                            }
+
+                                                            //gene & transcript
+                                                            if (symbolNode.hasProperty("symbolId")) jg.writeRaw(symbolNode.getProperty("symbolId").toString() + ","); else jg.writeRaw(",");
+                                                            if (featureNode.hasProperty("featureId")) jg.writeRaw(featureNode.getProperty("featureId").toString() + ","); else jg.writeRaw(",");
+                                                            if (featureNode.hasProperty("featureType")) jg.writeRaw(featureNode.getProperty("featureType").toString() + ","); else jg.writeRaw(",");
+                                                            jg.writeRaw(getTranscriptBiotype(biotypeRel.getType().name()) + ",");
+
+                                                            if (featureNode.hasLabel(VariantDatabase.getCanonicalLabel())) {
+                                                                jg.writeRaw("TRUE,");
+                                                            } else {
+                                                                jg.writeRaw("FALSE,");
+                                                            }
+
+                                                            //functional annotations
+                                                            String consequence = getFunctionalConsequence(consequenceRel.getType().name());
+                                                            jg.writeRaw(consequence + ",");
+                                                            jg.writeRaw(isConsequenceSevere(consequence) + ",");
+                                                            if (annotationNode.hasProperty("hgvsc")) jg.writeRaw(annotationNode.getProperty("hgvsc").toString() + ","); else jg.writeRaw(",");
+                                                            if (annotationNode.hasProperty("hgvsp")) jg.writeRaw(annotationNode.getProperty("hgvsp").toString() + ","); else jg.writeRaw(",");
+
+                                                            if (annotationNode.hasProperty("exon")) {
+                                                                jg.writeRaw(annotationNode.getProperty("exon").toString() + ",");
+                                                            } else if (annotationNode.hasProperty("intron")) {
+                                                                jg.writeRaw(annotationNode.getProperty("intron").toString() + ",");
+                                                            } else {
+                                                                jg.writeRaw(",");
+                                                            }
+
+                                                            if (annotationNode.hasProperty("sift")) jg.writeRaw(annotationNode.getProperty("sift").toString() + ","); else jg.writeRaw(",");
+                                                            if (annotationNode.hasProperty("polyphen")) jg.writeRaw(annotationNode.getProperty("polyphen").toString() + ","); else jg.writeRaw(",");
+                                                            if (annotationNode.hasProperty("codons")) jg.writeRaw(annotationNode.getProperty("codons").toString() + "\n"); else jg.writeRaw("\n");
+
+                                                        }
+
+                                                    }
+
+                                                }
+
+                                            }
+
+                                        }
+
+                                    }
+                                }
+                            }
+
+                        }
+
+                    }
+
+                    jg.flush();
+                    jg.close();
                 }
 
             };
@@ -638,6 +1078,7 @@ public class VariantDatabasePlugin
         }
     }
 
+    /*workflows*/
     @Workflow(name = "Autosomal Dominant Workflow v1", description = "A workflow to prioritise rare autosomal heterozygous calls")
     public void runAutosomalDominantWorkflowv1(JsonGenerator jg, HashSet<Long> excludeRunInfoNodes, HashSet<Long> includePanelNodes, Node runInfoNode) throws IOException {
 
@@ -1128,443 +1569,6 @@ public class VariantDatabasePlugin
 
     }
 
-    /*user action*/
-    @POST
-    @Path("/addvirtualpanel")
-    @Consumes(MediaType.APPLICATION_JSON)
-    @Produces(MediaType.APPLICATION_JSON)
-    public Response addVirtualPanel(final String json) {
-
-        try {
-
-            Date date = new Date();
-            HashMap<String, Object> properties = new HashMap<>();
-            Parameters parameters = objectMapper.readValue(json, Parameters.class);
-
-            try (Transaction tx = graphDb.beginTx()) {
-                Node userNode = graphDb.getNodeById(parameters.userNodeId);
-
-                if (userNode.hasLabel(VariantDatabase.getUserLabel())) {
-
-                    //make panel node
-                    properties.put("virtualPanelName", parameters.virtualPanelName);
-                    Node virtualPanelNode = Neo4j.addNode(graphDb, VariantDatabase.getVirtualPanelLabel(), properties);
-                    properties.clear();
-
-                    //link to user
-                    Relationship designedByRelationship = virtualPanelNode.createRelationshipTo(userNode, VariantDatabase.getDesignedByRelationship());
-                    designedByRelationship.setProperty("date", date.getTime());
-
-                    //link to genes
-                    for (String gene : parameters.virtualPanelList) {
-
-                        //match or create gene
-                        Node geneNode = Neo4j.matchOrCreateUniqueNode(graphDb, VariantDatabase.getSymbolLabel(), "symbolId", gene);
-
-                        //link to virtual panel
-                        virtualPanelNode.createRelationshipTo(geneNode, VariantDatabase.getContainsSymbolRelationship());
-                    }
-
-
-                }
-
-                tx.success();
-            }
-
-            return Response
-                    .status(Response.Status.OK)
-                    .build();
-
-        } catch (Exception e) {
-            logger.error(e.getMessage());
-            return Response
-                    .status(Response.Status.INTERNAL_SERVER_ERROR)
-                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
-                    .build();
-        }
-
-    }
-
-    @POST
-    @Path("/updateuserpassword")
-    @Consumes(MediaType.APPLICATION_JSON)
-    @Produces(MediaType.APPLICATION_JSON)
-    public Response updateUserPassword(final String json) {
-
-        try {
-
-            Parameters parameters = objectMapper.readValue(json, Parameters.class);
-
-            try (Transaction tx = graphDb.beginTx()) {
-                Node userNode = graphDb.getNodeById(parameters.userNodeId);
-                userNode.setProperty("password", parameters.password);
-                tx.success();
-            }
-
-            return Response.status(Response.Status.OK).build();
-
-        } catch (Exception e) {
-            logger.error(e.getMessage());
-            return Response
-                    .status(Response.Status.INTERNAL_SERVER_ERROR)
-                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
-                    .build();
-        }
-    }
-
-    @POST
-    @Path("/createnewuser")
-    @Consumes(MediaType.APPLICATION_JSON)
-    @Produces(MediaType.APPLICATION_JSON)
-    public Response createNewUser(final String json) {
-
-        try {
-
-            User user = objectMapper.readValue(json, User.class);
-            HashMap<String, Object> properties = new HashMap<>();
-
-            properties.put("fullName", user.fullName);
-            properties.put("password", user.password);
-            properties.put("jobTitle", user.jobTitle);
-            properties.put("userId", user.userId);
-            properties.put("contactNumber", user.contactNumber);
-            properties.put("admin", user.admin);
-
-            try (Transaction tx = graphDb.beginTx()) {
-                Neo4j.addNode(graphDb, VariantDatabase.getUserLabel(), properties);
-                tx.success();
-            }
-
-            return Response.status(Response.Status.OK).build();
-        } catch (Exception e) {
-            logger.error(e.getMessage());
-            return Response
-                    .status(Response.Status.INTERNAL_SERVER_ERROR)
-                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
-                    .build();
-        }
-
-    }
-
-    @POST
-    @Path("/addvariantpathogenicity")
-    @Consumes(MediaType.APPLICATION_JSON)
-    @Produces(MediaType.APPLICATION_JSON)
-    public Response addVariantPathogenicity(final String json) {
-
-        try {
-
-            Parameters parameters = objectMapper.readValue(json, Parameters.class);
-            Node variantNode, userNode;
-
-            try (Transaction tx = graphDb.beginTx()) {
-                variantNode = graphDb.getNodeById(parameters.variantNodeId);
-                userNode = graphDb.getNodeById(parameters.userNodeId);
-            }
-
-            //add user action
-            if (parameters.classification < 1 || parameters.classification > 5){
-                throw new IllegalArgumentException("Unknown classification");
-            }
-
-            HashMap<String, Object> properties = new HashMap<>();
-            properties.put("classification", parameters.classification);
-
-            UserEvent.addUserEvent(graphDb, variantNode, VariantDatabase.getVariantPathogenicityLabel(), userNode, properties);
-
-            return Response
-                    .status(Response.Status.OK)
-                    .build();
-
-        } catch (IllegalArgumentException e) {
-            logger.error(e.getMessage());
-            return Response
-                    .status(Response.Status.BAD_REQUEST)
-                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
-                    .build();
-        } catch (Exception e) {
-            logger.error(e.getMessage());
-            return Response
-                    .status(Response.Status.INTERNAL_SERVER_ERROR)
-                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
-                    .build();
-        }
-
-    }
-
-    @POST
-    @Path("/authoriseuseraction")
-    @Consumes(MediaType.APPLICATION_JSON)
-    @Produces(MediaType.APPLICATION_JSON)
-    public Response authoriseUserAction(final String json) {
-
-        try {
-
-            Parameters parameters = objectMapper.readValue(json, Parameters.class);
-            Node eventNode, userNode;
-
-            try (Transaction tx = graphDb.beginTx()) {
-                eventNode = graphDb.getNodeById(parameters.eventNodeId);
-                userNode = graphDb.getNodeById(parameters.userNodeId);
-            }
-
-            if (parameters.addOrRemove){
-                UserEvent.authUserEvent(graphDb, eventNode, userNode);
-            } else {
-                UserEvent.rejectUserEvent(graphDb, eventNode, userNode);
-            }
-
-            return Response
-                    .status(Response.Status.OK)
-                    .build();
-
-        } catch (Exception e) {
-            logger.error(e.getMessage());
-            return Response
-                    .status(Response.Status.INTERNAL_SERVER_ERROR)
-                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
-                    .build();
-        }
-
-    }
-
-    @GET
-    @Path("/getpathogenicityforauthorisation")
-    @Produces(MediaType.APPLICATION_JSON)
-    public Response getPathogenicityForAuthorisation() {
-
-        try {
-
-            StreamingOutput stream = new StreamingOutput() {
-
-                @Override
-                public void write(OutputStream os) throws IOException, WebApplicationException {
-
-                    JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
-
-                    jg.writeStartArray();
-
-                    try (Transaction tx = graphDb.beginTx()) {
-                        try (ResourceIterator<Node> variantPathogenicityIterator = graphDb.findNodes(VariantDatabase.getVariantPathogenicityLabel())){
-
-                            while (variantPathogenicityIterator.hasNext()) {
-                                Node variantPathogenicity = variantPathogenicityIterator.next();
-
-                                if (UserEvent.getUserEventStatus(graphDb, variantPathogenicity) == UserEvent.UserEventStatus.PENDING_AUTH){
-
-                                    jg.writeStartObject();
-
-                                    writeVariantInformation(UserEvent.getSubjectNode(graphDb, variantPathogenicity), jg);
-
-                                    jg.writeEndObject();
-
-                                }
-
-                            }
-
-                        }
-                    }
-
-                    jg.writeEndArray();
-
-                    jg.flush();
-                    jg.close();
-
-                }
-
-            };
-
-            return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
-
-        } catch (Exception e) {
-            logger.error(e.getMessage());
-            return Response
-                    .status(Response.Status.INTERNAL_SERVER_ERROR)
-                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
-                    .build();
-        }
-
-    }
-
-    @POST
-    @Path("/getvariantreport")
-    @Consumes(MediaType.APPLICATION_JSON)
-    @Produces(MediaType.APPLICATION_JSON)
-    public Response getVariantReport(final String json) {
-
-        try {
-            StreamingOutput stream = new StreamingOutput() {
-
-                @Override
-                public void write(OutputStream os) throws IOException, WebApplicationException {
-
-                    DateFormat dateFormat = new SimpleDateFormat("dd/MM/yy HH:mm:ss");
-                    JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
-                    Parameters parameters = objectMapper.readValue(json, Parameters.class);
-                    float maxAf;
-
-                    try (Transaction tx = graphDb.beginTx()) {
-
-                        Node runInfoNode = graphDb.getNodeById(parameters.runInfoNodeId);
-                        Node sampleNode = runInfoNode.getSingleRelationship(VariantDatabase.getHasAnalysisRelationship(), Direction.INCOMING).getStartNode();
-
-                        //headers
-                        //jg.writeRaw("#Variant Report v" + version + "\n");
-                        //jg.writeRaw("#Created " + graphDb.getNodeById(parameters.userNodeId).getProperty("fullName") + " " + dateFormat.format(new Date()) + "\n");
-                        jg.writeRaw("SampleId,WorklistId,Variant,Genotype,Quality,Occurrence,dbSNP,GERP++,PhyloP,PhastCons,");
-
-                        //print pop freq header
-                        for (VariantDatabase.kGPhase3Population population : VariantDatabase.kGPhase3Population.values()) {
-                            jg.writeRaw("1KG_" + population.toString() + ",");
-                        }
-                        jg.writeRaw("Max_1KG,");
-                        for (VariantDatabase.exacPopulation population : VariantDatabase.exacPopulation.values()) {
-                            jg.writeRaw("ExAC_" + population.toString() + ",");
-                        }
-                        jg.writeRaw("Max_ExAC,");
-
-                        jg.writeRaw("Gene,Transcript,TranscriptType,TranscriptBiotype,CanonicalTranscript,Consequence,Severe,HGVSc,HGVSp,Location,SIFT,PolyPhen,Codons\n");
-
-                        //loop over variants node ids
-                        for (long variantNodeId : parameters.variantNodeIds){
-                            Node variantNode = graphDb.getNodeById(variantNodeId);
-
-                            //loop over selected variants
-                            for (Relationship relationship : variantNode.getRelationships(Direction.INCOMING)){
-                                if (relationship.getStartNode().getId() == parameters.runInfoNodeId){
-
-                                    for (Relationship consequenceRel : variantNode.getRelationships(Direction.OUTGOING)) {
-                                        Node annotationNode = consequenceRel.getEndNode();
-
-                                        if (annotationNode.hasLabel(VariantDatabase.getAnnotationLabel())){
-
-                                            for (Relationship inFeatureRel : annotationNode.getRelationships(Direction.OUTGOING, VariantDatabase.getInFeatureRelationship())) {
-                                                Node featureNode = inFeatureRel.getEndNode();
-
-                                                if (featureNode.hasLabel(VariantDatabase.getFeatureLabel())){
-
-                                                    for (Relationship biotypeRel : featureNode.getRelationships(Direction.INCOMING)) {
-                                                        Node symbolNode = biotypeRel.getStartNode();
-
-                                                        if (symbolNode.hasLabel(VariantDatabase.getSymbolLabel())){
-
-                                                            //sample
-                                                            if (sampleNode.hasProperty("sampleId")) jg.writeRaw(sampleNode.getProperty("sampleId").toString() + ","); else jg.writeRaw(",");
-                                                            if (runInfoNode.hasProperty("worklistId")) jg.writeRaw(runInfoNode.getProperty("worklistId").toString() + ","); else jg.writeRaw(",");
-
-                                                            //variant
-                                                            if (variantNode.hasProperty("variantId")) jg.writeRaw(variantNode.getProperty("variantId").toString() + ","); else jg.writeRaw(",");
-                                                            jg.writeRaw(getVariantInheritance(relationship.getType().name()) + ",");
-                                                            if (relationship.hasProperty("quality")) jg.writeRaw(relationship.getProperty("quality").toString() + ","); else jg.writeRaw(",");
-                                                            jg.writeRaw(getGlobalVariantOccurrence(variantNode) + ",");
-                                                            if (variantNode.hasProperty("dbSnpId")) jg.writeRaw(variantNode.getProperty("dbSnpId").toString() + ","); else jg.writeRaw(",");
-                                                            if (variantNode.hasProperty("gerp")) jg.writeRaw(variantNode.getProperty("gerp").toString() + ","); else jg.writeRaw(",");
-                                                            if (variantNode.hasProperty("phyloP")) jg.writeRaw(variantNode.getProperty("phyloP").toString() + ","); else jg.writeRaw(",");
-                                                            if (variantNode.hasProperty("phastCons")) jg.writeRaw(variantNode.getProperty("phastCons").toString() + ","); else jg.writeRaw(",");
-
-                                                            //1kg
-                                                            maxAf = -1f;
-                                                            for (VariantDatabase.kGPhase3Population population : VariantDatabase.kGPhase3Population.values()) {
-                                                                if (variantNode.hasProperty("kGPhase3" + population.toString() + "Af")){
-                                                                    jg.writeRaw(variantNode.getProperty("kGPhase3" + population.toString() + "Af").toString() + ",");
-
-                                                                    float tmp = (float) variantNode.getProperty("kGPhase3" + population.toString() + "Af");
-                                                                    if (tmp > maxAf) maxAf = tmp;
-
-                                                                } else {
-                                                                    jg.writeRaw(",");
-                                                                }
-                                                            }
-                                                            if (maxAf != -1f){
-                                                                jg.writeRaw(Float.toString(maxAf) + ",");
-                                                            } else {
-                                                                jg.writeRaw(",");
-                                                            }
-
-                                                            //ExAC
-                                                            maxAf = -1f;
-                                                            for (VariantDatabase.exacPopulation population : VariantDatabase.exacPopulation.values()) {
-                                                                if (variantNode.hasProperty("exac" + population.toString() + "Af")){
-                                                                    jg.writeRaw(variantNode.getProperty("exac" + population.toString() + "Af").toString() + ",");
-
-                                                                    float tmp = (float) variantNode.getProperty("exac" + population.toString() + "Af");
-                                                                    if (tmp > maxAf) maxAf = tmp;
-
-                                                                } else {
-                                                                    jg.writeRaw(",");
-                                                                }
-                                                            }
-                                                            if (maxAf != -1f){
-                                                                jg.writeRaw(Float.toString(maxAf) + ",");
-                                                            } else {
-                                                                jg.writeRaw(",");
-                                                            }
-
-                                                            //gene & transcript
-                                                            if (symbolNode.hasProperty("symbolId")) jg.writeRaw(symbolNode.getProperty("symbolId").toString() + ","); else jg.writeRaw(",");
-                                                            if (featureNode.hasProperty("featureId")) jg.writeRaw(featureNode.getProperty("featureId").toString() + ","); else jg.writeRaw(",");
-                                                            if (featureNode.hasProperty("featureType")) jg.writeRaw(featureNode.getProperty("featureType").toString() + ","); else jg.writeRaw(",");
-                                                            jg.writeRaw(getTranscriptBiotype(biotypeRel.getType().name()) + ",");
-
-                                                            if (featureNode.hasLabel(VariantDatabase.getCanonicalLabel())) {
-                                                                jg.writeRaw("TRUE,");
-                                                            } else {
-                                                                jg.writeRaw("FALSE,");
-                                                            }
-
-                                                            //functional annotations
-                                                            String consequence = getFunctionalConsequence(consequenceRel.getType().name());
-                                                            jg.writeRaw(consequence + ",");
-                                                            jg.writeRaw(isConsequenceSevere(consequence) + ",");
-                                                            if (annotationNode.hasProperty("hgvsc")) jg.writeRaw(annotationNode.getProperty("hgvsc").toString() + ","); else jg.writeRaw(",");
-                                                            if (annotationNode.hasProperty("hgvsp")) jg.writeRaw(annotationNode.getProperty("hgvsp").toString() + ","); else jg.writeRaw(",");
-
-                                                            if (annotationNode.hasProperty("exon")) {
-                                                                jg.writeRaw(annotationNode.getProperty("exon").toString() + ",");
-                                                            } else if (annotationNode.hasProperty("intron")) {
-                                                                jg.writeRaw(annotationNode.getProperty("intron").toString() + ",");
-                                                            } else {
-                                                                jg.writeRaw(",");
-                                                            }
-
-                                                            if (annotationNode.hasProperty("sift")) jg.writeRaw(annotationNode.getProperty("sift").toString() + ","); else jg.writeRaw(",");
-                                                            if (annotationNode.hasProperty("polyphen")) jg.writeRaw(annotationNode.getProperty("polyphen").toString() + ","); else jg.writeRaw(",");
-                                                            if (annotationNode.hasProperty("codons")) jg.writeRaw(annotationNode.getProperty("codons").toString() + "\n"); else jg.writeRaw("\n");
-
-                                                        }
-
-                                                    }
-
-                                                }
-
-                                            }
-
-                                        }
-
-                                    }
-                                }
-                            }
-
-                        }
-
-                    }
-
-                    jg.flush();
-                    jg.close();
-                }
-
-            };
-
-            return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
-        } catch (Exception e) {
-            logger.error(e.getMessage());
-            return Response
-                    .status(Response.Status.INTERNAL_SERVER_ERROR)
-                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
-                    .build();
-        }
-    }
-
     /*helper functions*/
     private Boolean variantHasSevereConsequence(Node variantNode){
         try (Transaction tx = graphDb.beginTx()) {
@@ -1804,6 +1808,99 @@ public class VariantDatabasePlugin
         }
     }
 
+    /*User event functions*/
+    private Node getSubjectNode(Node eventNode){
+        Node subjectNode = null;
+
+        try (Transaction tx = graphDb.beginTx()) {
+            for (org.neo4j.graphdb.Path path : graphDb.traversalDescription().relationships(VariantDatabase.getHasUserEventRelationship(), Direction.INCOMING).traverse(eventNode)) {
+                for (Node previousNode : path.nodes()) {
+                    subjectNode = previousNode;
+                }
+            }
+        }
+
+        return subjectNode;
+    }
+    private Node getLastUserEventNode(Node subjectNode){
+
+        try (Transaction tx = graphDb.beginTx()) {
+            long lastEventNodeId = subjectNode.getId();
+
+            TraversalDescription traversalDescription = graphDb.traversalDescription()
+                    .uniqueness(Uniqueness.NODE_GLOBAL)
+                    .uniqueness(Uniqueness.RELATIONSHIP_GLOBAL)
+                    .relationships(VariantDatabase.getHasUserEventRelationship(), Direction.OUTGOING);
+
+            for (org.neo4j.graphdb.Path path : traversalDescription.traverse(subjectNode)) {
+                for (Node eventNode : path.nodes()) {
+                    if (eventNode.getId() == subjectNode.getId()) continue;
+
+                    //get event status
+                    UserEventStatus status = getUserEventStatus(eventNode);
+
+                    if (status == null) {
+                        throw new NullPointerException("Event has null status");
+                    } else if (status == UserEventStatus.PENDING_AUTH) {
+                        throw new IllegalArgumentException("Event is pending authorisation. Cannot add new event");
+                    }
+
+                    lastEventNodeId = eventNode.getId();
+                }
+            }
+
+            return graphDb.getNodeById(lastEventNodeId);
+        }
+
+    }
+    private void addUserEvent(Node lastUserEventNode, Label newEventNodeLabel, HashMap<String, Object> properties, Node userNode) {
+
+        try (Transaction tx = graphDb.beginTx()) {
+            Node newEventNode = graphDb.createNode(newEventNodeLabel);
+
+            for (Map.Entry<String, Object> iter : properties.entrySet()){
+                newEventNode.setProperty(iter.getKey(), iter.getValue());
+            }
+
+            Relationship addedByRelationship = newEventNode.createRelationshipTo(userNode, VariantDatabase.getAddedByRelationship());
+            addedByRelationship.setProperty("date", new Date().getTime());
+
+            lastUserEventNode.createRelationshipTo(newEventNode, VariantDatabase.getHasUserEventRelationship());
+
+            tx.success();
+        }
+
+    }
+    private void authUserEvent(Node eventNode, Node userNode, boolean acceptOrReject){
+        try (Transaction tx = graphDb.beginTx()) {
+            Relationship authByRelationship = eventNode.createRelationshipTo(userNode, acceptOrReject ? VariantDatabase.getAuthorisedByRelationship() : VariantDatabase.getRejectedByRelationship());
+            authByRelationship.setProperty("date", new Date().getTime());
+            tx.success();
+        }
+    }
+    private UserEventStatus getUserEventStatus(Node eventNode) {
+        Relationship authorisedByRelationship, rejectedByRelationship;
+
+        try (Transaction tx = graphDb.beginTx()) {
+            authorisedByRelationship = eventNode.getSingleRelationship(VariantDatabase.getAuthorisedByRelationship(), Direction.OUTGOING);
+            rejectedByRelationship = eventNode.getSingleRelationship(VariantDatabase.getRejectedByRelationship(), Direction.OUTGOING);
+        }
+
+        if (authorisedByRelationship == null && rejectedByRelationship == null){
+            return UserEventStatus.PENDING_AUTH;
+        }
+
+        if (authorisedByRelationship != null && rejectedByRelationship == null){
+            return UserEventStatus.ACTIVE;
+        }
+
+        if (authorisedByRelationship == null && rejectedByRelationship != null){
+            return UserEventStatus.REJECTED;
+        }
+
+        return null;
+    }
+
     /*write functions*/
     private void writeFullUserInformation(Node userNode, JsonGenerator jg) throws IOException {
         try (Transaction tx = graphDb.beginTx()) {
@@ -2035,11 +2132,11 @@ public class VariantDatabasePlugin
                     jg.writeEndObject();
 
                     if (authorisedByRelationship == null && rejectedByRelationship == null){
-                        jg.writeStringField("status", UserEvent.UserEventStatus.PENDING_AUTH.toString());
+                        jg.writeStringField("status", UserEventStatus.PENDING_AUTH.toString());
                     }
 
                     if (authorisedByRelationship != null && rejectedByRelationship == null){
-                        jg.writeStringField("status", UserEvent.UserEventStatus.ACTIVE.toString());
+                        jg.writeStringField("status", UserEventStatus.ACTIVE.toString());
 
                         jg.writeObjectFieldStart("auth");
                         writeLiteUserInformation(authorisedByRelationship.getEndNode(), jg);
@@ -2049,7 +2146,7 @@ public class VariantDatabasePlugin
                     }
 
                     if (authorisedByRelationship == null && rejectedByRelationship != null){
-                        jg.writeStringField("status", UserEvent.UserEventStatus.REJECTED.toString());
+                        jg.writeStringField("status", UserEventStatus.REJECTED.toString());
 
                         jg.writeObjectFieldStart("auth");
                         writeLiteUserInformation(rejectedByRelationship.getEndNode(), jg);
