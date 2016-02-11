@@ -482,10 +482,15 @@ public class VariantDatabasePlugin
 
             //check variant does not already have outstanding auths
             Node lastEventNode = getLastUserEventNode(variantNode);
-            UserEventStatus status = getUserEventStatus(lastEventNode);
 
-            if (status == UserEventStatus.PENDING_AUTH){
-                throw new IllegalArgumentException("Cannot add pathogenicity. Auth pending.");
+            try (Transaction tx = graphDb.beginTx()) {
+                if (lastEventNode.getId() != variantNode.getId()){
+                    UserEventStatus status = getUserEventStatus(lastEventNode);
+
+                    if (status == UserEventStatus.PENDING_AUTH){
+                        throw new IllegalArgumentException("Cannot add pathogenicity. Auth pending.");
+                    }
+                }
             }
 
             //add properties
@@ -498,6 +503,7 @@ public class VariantDatabasePlugin
             return Response
                     .status(Response.Status.OK)
                     .build();
+            //todo cannot add mor ethan one path
 
         } catch (IllegalArgumentException e) {
             logger.error(e.getMessage());
@@ -1824,8 +1830,6 @@ public class VariantDatabasePlugin
             return consequenceRelName;
         }
     }
-
-    /*User event functions*/
     private Node getSubjectNodeFromEventNode(Node eventNode){
 
         Node subjectNode = null;
@@ -1865,9 +1869,11 @@ public class VariantDatabasePlugin
 
             //loop over nodes in this path
             for (Node node : longestPath.nodes()) {
+                logger.debug(Long.toString(node.getId()));
                 lastEventNode = node;
             }
 
+            logger.debug("last node = " + Long.toString(lastEventNode.getId()));
         }
 
         return lastEventNode;
@@ -1898,9 +1904,10 @@ public class VariantDatabasePlugin
         }
     }
     private UserEventStatus getUserEventStatus(Node eventNode) {
-        Relationship authorisedByRelationship, rejectedByRelationship;
+        Relationship addedbyRelationship, authorisedByRelationship, rejectedByRelationship;
 
         try (Transaction tx = graphDb.beginTx()) {
+            addedbyRelationship = eventNode.getSingleRelationship(VariantDatabase.getAddedByRelationship(), Direction.OUTGOING);
             authorisedByRelationship = eventNode.getSingleRelationship(VariantDatabase.getAuthorisedByRelationship(), Direction.OUTGOING);
             rejectedByRelationship = eventNode.getSingleRelationship(VariantDatabase.getRejectedByRelationship(), Direction.OUTGOING);
         }
