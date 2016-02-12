@@ -6,6 +6,8 @@ package nhs.genetics.cardiff;
 public class Parameters {
     public String featureId;
     public String variantId;
+    public String symbolId;
+    public String sampleId;
     public Long runInfoNodeId;
     public Long variantNodeId;
     public Long featureNodeId;
