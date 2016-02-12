@@ -8,6 +8,7 @@ public class Parameters {
     public String variantId;
     public Long runInfoNodeId;
     public Long variantNodeId;
+    public Long featureNodeId;
     public Long userNodeId;
     public Long pathogenicityNodeId;
     public Integer classification;
@@ -20,6 +21,7 @@ public class Parameters {
     public Long panelNodeId;
     public Long eventNodeId;
     public Boolean addOrRemove;
+    public Boolean featurePreference;
     public String userId;
     public String password;
     public String workflowName;
