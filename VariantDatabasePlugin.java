@@ -12,6 +12,7 @@ import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.util.*;
 
+import javax.security.auth.login.CredentialException;
 import javax.ws.rs.*;
 import javax.ws.rs.Path;
 import javax.ws.rs.core.*;
@@ -480,7 +481,7 @@ public class VariantDatabasePlugin
             }
 
             //check variant does not already have outstanding auths
-            Node lastEventNode = getLastUserEventNode(variantNode); //todo check
+            Node lastEventNode = getLastUserEventNode(variantNode);
 
             if (lastEventNode.getId() != variantNode.getId()){
                 UserEventStatus status = getUserEventStatus(lastEventNode);
@@ -499,7 +500,7 @@ public class VariantDatabasePlugin
             }
 
             //add event
-            addUserEvent(lastEventNode, VariantDatabase.getVariantPathogenicityLabel(), properties, userNode); //todo check
+            addUserEvent(lastEventNode, VariantDatabase.getVariantPathogenicityLabel(), properties, userNode);
 
             return Response
                     .status(Response.Status.OK)
@@ -1029,9 +1030,14 @@ public class VariantDatabasePlugin
             try (Transaction tx = graphDb.beginTx()) {
                 eventNode = graphDb.getNodeById(parameters.eventNodeId);
                 userNode = graphDb.getNodeById(parameters.userNodeId);
+
+                if (!(boolean) userNode.getProperty("admin")) {
+                    throw new CredentialException("Admin rights required for this operation.");
+                }
+
             }
 
-            if (getUserEventStatus(eventNode) != UserEventStatus.PENDING_AUTH){
+            if (getUserEventStatus(eventNode) != UserEventStatus.PENDING_AUTH) {
                 throw new IllegalArgumentException("Event has no pending authorisation");
             }
 
@@ -1041,6 +1047,12 @@ public class VariantDatabasePlugin
                     .status(Response.Status.OK)
                     .build();
 
+        } catch (CredentialException e){
+            logger.error(e.getMessage());
+            return Response
+                    .status(Response.Status.FORBIDDEN)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
         } catch (Exception e) {
             logger.error(e.getMessage());
             return Response
