@@ -24,6 +24,7 @@ public class Parameters {
     public Long eventNodeId;
     public Boolean addOrRemove;
     public Boolean featurePreference;
+    public Boolean passOrFail;
     public String userId;
     public String password;
     public String workflowName;

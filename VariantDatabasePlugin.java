@@ -13,6 +13,7 @@ import java.nio.charset.Charset;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.util.*;
+import java.util.regex.Pattern;
 import java.util.zip.GZIPInputStream;
 
 import javax.security.auth.login.CredentialException;
@@ -20,6 +21,12 @@ import javax.ws.rs.*;
 import javax.ws.rs.Path;
 import javax.ws.rs.core.*;
 
+import htsjdk.tribble.readers.LineIteratorImpl;
+import htsjdk.tribble.readers.LineReader;
+import htsjdk.tribble.readers.LineReaderUtil;
+import htsjdk.variant.variantcontext.Allele;
+import htsjdk.variant.variantcontext.VariantContext;
+import htsjdk.variant.vcf.VCFCodec;
 import htsjdk.variant.vcf.VCFFileReader;
 import org.codehaus.jackson.JsonEncoding;
 import org.codehaus.jackson.JsonGenerator;
@@ -61,10 +68,56 @@ public class VariantDatabasePlugin
     @Path("/diagnostic/return")
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
-    public Response returnInputJson(final String json) {
+    public Response diagnosticReturn(final String json) {
         logger.debug(json);
         return Response.status( Response.Status.OK ).entity(
                 (json).getBytes( Charset.forName("UTF-8") ) ).build();
+    }
+
+    @GET
+    @Path("/diagnostic/nodes/multiplerelationships")
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response diagnosticNodesMultipleRelationships() {
+        try {
+
+            StreamingOutput stream = new StreamingOutput() {
+
+                @Override
+                public void write(OutputStream os) throws IOException, WebApplicationException {
+
+                    HashSet<Long> ids = new HashSet<>();
+                    JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
+
+                    try (Transaction tx = graphDb.beginTx()) {
+                        for (Node node : graphDb.getAllNodes()){
+
+                            for (Relationship relationship : node.getRelationships(Direction.OUTGOING)){
+                                if (ids.contains(relationship.getEndNode().getId())) {
+                                    logger.debug("node " + node.getId() + " " + node.getLabels().toString() + " is connected to node " + relationship.getEndNode().getId() + " " + relationship.getEndNode().getLabels().toString() + " more than once");
+                                } else {
+                                    ids.add(relationship.getEndNode().getId());
+                                }
+                            }
+
+                            ids.clear();
+                        }
+                    }
+
+                    jg.flush();
+                    jg.close();
+                }
+
+            };
+
+            return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+
+        } catch (Exception e) {
+            logger.error(e.getMessage());
+            return Response
+                    .status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        }
     }
 
     @GET
@@ -233,6 +286,8 @@ public class VariantDatabasePlugin
 
     }
 
+
+    //todo here!
     @POST
     @Path("/panels/info")
     @Consumes(MediaType.APPLICATION_JSON)
@@ -838,6 +893,72 @@ public class VariantDatabasePlugin
     }
 
     @POST
+    @Path("/symbol/info")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response symbolInfo(final String json) {
+
+        try {
+
+            StreamingOutput stream = new StreamingOutput() {
+
+                @Override
+                public void write(OutputStream os) throws IOException, WebApplicationException {
+
+                    JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
+                    Parameters parameters = objectMapper.readValue(json, Parameters.class);
+                    Node symbolNode = null;
+
+                    jg.writeStartObject();
+
+                    try (Transaction tx = graphDb.beginTx()) {
+
+                        try (ResourceIterator<Node> symbols = graphDb.findNodes(VariantDatabase.getSymbolLabel(), "symbolId", parameters.symbolId)) {
+                            while (symbols.hasNext()) {
+                                symbolNode = symbols.next();
+                            }
+                            symbols.close();
+                        }
+
+                        if (symbolNode!=null){
+                            writeSymbolInformation(symbolNode, jg);
+
+                            jg.writeArrayFieldStart("features");
+                            for (Relationship hasProteinCodingBiotypeRelationship : symbolNode.getRelationships(Direction.OUTGOING, VariantDatabase.getHasProteinCodingBiotypeRelationship())){
+                                Node featureNode = hasProteinCodingBiotypeRelationship.getEndNode();
+
+                                jg.writeStartObject();
+                                writeFeatureInformation(featureNode, jg);
+                                jg.writeEndObject();
+
+                            }
+                            jg.writeEndArray();
+
+                        }
+
+                    }
+
+                    jg.writeEndObject();
+
+                    jg.flush();
+                    jg.close();
+                }
+
+            };
+
+            return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+
+        } catch (Exception e) {
+            logger.error(e.getMessage());
+            return Response
+                    .status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        }
+
+    }
+
+    @POST
     @Path("/annotation/info")
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
@@ -959,6 +1080,191 @@ public class VariantDatabasePlugin
 
                     jg.flush();
                     jg.close();
+                }
+
+            };
+
+            return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+
+        } catch (Exception e) {
+            logger.error(e.getMessage());
+            return Response
+                    .status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        }
+
+    }
+
+    @GET
+    @Path("/analyses/pendingqc")
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response analysesPendingQc() {
+
+        try {
+
+            StreamingOutput stream = new StreamingOutput() {
+
+                @Override
+                public void write(OutputStream os) throws IOException, WebApplicationException {
+
+                    JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
+
+                    jg.writeStartArray();
+
+                    try (Transaction tx = graphDb.beginTx()) {
+                        try (ResourceIterator<Node> iter = graphDb.findNodes(VariantDatabase.getRunInfoLabel())){
+
+                            while (iter.hasNext()) {
+                                Node runInfoNode = iter.next();
+
+                                if (getLastActiveUserEventNode(runInfoNode) == null){
+
+                                    jg.writeStartObject();
+                                    writeSampleInformation(runInfoNode.getSingleRelationship(VariantDatabase.getHasAnalysisRelationship(), Direction.INCOMING).getStartNode(), jg);
+                                    writeRunInformation(runInfoNode, jg);
+                                    jg.writeEndObject();
+
+                                }
+
+                            }
+
+                        }
+                    }
+
+                    jg.writeEndArray();
+
+                    jg.flush();
+                    jg.close();
+
+                }
+
+            };
+
+            return Response.ok().entity(stream).type(MediaType.APPLICATION_JSON).build();
+
+        } catch (Exception e) {
+            logger.error(e.getMessage());
+            return Response
+                    .status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        }
+
+    }
+
+    @POST
+    @Path("/analyses/addqc")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response analysesAddQc(final String json) {
+
+        try {
+
+            Node runInfoNode, userNode;
+            Parameters parameters = objectMapper.readValue(json, Parameters.class);
+
+            //get nodes
+            try (Transaction tx = graphDb.beginTx()) {
+                runInfoNode = graphDb.getNodeById(parameters.runInfoNodeId);
+                userNode = graphDb.getNodeById(parameters.userNodeId);
+            }
+
+            //check variant does not already have outstanding auths
+            Node lastEventNode = getLastUserEventNode(runInfoNode);
+
+            if (lastEventNode.getId() != runInfoNode.getId()){
+                UserEventStatus status = getUserEventStatus(lastEventNode);
+
+                if (status == UserEventStatus.PENDING_AUTH){
+                    throw new IllegalArgumentException("Cannot add qc result. Auth pending.");
+                }
+
+            }
+
+            //add properties
+            HashMap<String, Object> properties = new HashMap<>();
+            properties.put("passOrFail", parameters.passOrFail);
+
+            if (parameters.evidence != null) {
+                if (!parameters.evidence.equals("")) properties.put("evidence", parameters.evidence);
+            }
+
+            //add event
+            addUserEvent(lastEventNode, VariantDatabase.getQualityControlLabel(), properties, userNode);
+
+            return Response
+                    .status(Response.Status.OK)
+                    .build();
+
+        } catch (IllegalArgumentException e) {
+            logger.error(e.getMessage());
+            return Response
+                    .status(Response.Status.BAD_REQUEST)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        } catch (Exception e) {
+            logger.error(e.getMessage());
+            return Response
+                    .status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        }
+
+    }
+
+    @GET
+    @Path("/analyses/pendingqcauth")
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response analysesPendingQcAuth() {
+
+        try {
+
+            StreamingOutput stream = new StreamingOutput() {
+
+                @Override
+                public void write(OutputStream os) throws IOException, WebApplicationException {
+
+                    JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
+
+                    jg.writeStartArray();
+
+                    try (Transaction tx = graphDb.beginTx()) {
+                        try (ResourceIterator<Node> iter = graphDb.findNodes(VariantDatabase.getQualityControlLabel())){
+
+                            while (iter.hasNext()) {
+                                Node qualityControlNode = iter.next();
+
+                                if (getUserEventStatus(qualityControlNode) == UserEventStatus.PENDING_AUTH){
+
+                                    Relationship addedByRelationship = qualityControlNode.getSingleRelationship(VariantDatabase.getAddedByRelationship(), Direction.OUTGOING);
+
+                                    jg.writeStartObject();
+
+                                    jg.writeNumberField("eventNodeId", qualityControlNode.getId());
+                                    jg.writeStringField("event", "Quality Control");
+                                    jg.writeBooleanField("value", (boolean) qualityControlNode.getProperty("passOrFail"));
+                                    if (qualityControlNode.hasProperty("evidence")) jg.writeStringField("evidence", qualityControlNode.getProperty("evidence").toString());
+
+                                    jg.writeObjectFieldStart("add");
+                                    writeLiteUserInformation(addedByRelationship.getEndNode(), jg);
+                                    jg.writeNumberField("date",(long) addedByRelationship.getProperty("date"));
+                                    jg.writeEndObject();
+
+                                    jg.writeEndObject();
+
+                                }
+
+                            }
+
+                        }
+                    }
+
+                    jg.writeEndArray();
+
+                    jg.flush();
+                    jg.close();
+
                 }
 
             };
@@ -1144,7 +1450,6 @@ public class VariantDatabasePlugin
                 @Override
                 public void write(OutputStream os) throws IOException, WebApplicationException {
 
-                    DateFormat dateFormat = new SimpleDateFormat("dd/MM/yy HH:mm:ss");
                     JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
                     Parameters parameters = objectMapper.readValue(json, Parameters.class);
                     float maxAf;
@@ -1169,7 +1474,7 @@ public class VariantDatabasePlugin
                         }
                         jg.writeRaw("Max_ExAC,");
 
-                        jg.writeRaw("Gene,Transcript,TranscriptType,TranscriptBiotype,CanonicalTranscript,PreferredTranscript,Consequence,Severe,InternalClass,HGVSc,HGVSp,Location,SIFT,PolyPhen,Codons\n");
+                        jg.writeRaw("Gene,Transcript,TranscriptType,TranscriptBiotype,CanonicalTranscript,PreferredTranscript,Consequence,Severe,OMIM,InternalClass,HGVSc,HGVSp,Location,SIFT,PolyPhen,Codons\n");
 
                         //loop over variants node ids
                         for (long variantNodeId : parameters.variantNodeIds){
@@ -1258,11 +1563,27 @@ public class VariantDatabasePlugin
                                                             } else {
                                                                 jg.writeRaw("FALSE,");
                                                             }
-                                                            
+
+                                                            //internal choice
+                                                            Node lastActiveEventFeaturePrefNode =  getLastActiveUserEventNode(featureNode);
+                                                            if (lastActiveEventFeaturePrefNode != null){
+                                                                jg.writeRaw(lastActiveEventFeaturePrefNode.getProperty("preference").toString() + ",");
+                                                            } else {
+                                                                jg.writeRaw(",");
+                                                            }
+
                                                             //functional annotations
                                                             String consequence = getFunctionalConsequence(consequenceRel.getType().name());
                                                             jg.writeRaw(consequence + ",");
                                                             jg.writeRaw(isConsequenceSevere(consequence) + ",");
+
+                                                            //omim
+                                                            for (Relationship hasAssociatedSymbol : symbolNode.getRelationships(Direction.INCOMING, VariantDatabase.getHasAssociatedSymbol())){
+                                                                Node disorderNode = hasAssociatedSymbol.getStartNode();
+                                                                jg.writeRaw(disorderNode.getProperty("disorder").toString() + ";");
+                                                            }
+                                                            jg.writeRaw(",");
+
                                                             if (annotationNode.hasProperty("hgvsc")) jg.writeRaw(annotationNode.getProperty("hgvsc").toString() + ","); else jg.writeRaw(",");
                                                             if (annotationNode.hasProperty("hgvsp")) jg.writeRaw(annotationNode.getProperty("hgvsp").toString() + ","); else jg.writeRaw(",");
 
@@ -1312,32 +1633,42 @@ public class VariantDatabasePlugin
         }
     }
 
+    //todo
     @GET
-    @Path("/omim/update")
+    @Path("/omim/add")
     @Produces(MediaType.APPLICATION_JSON)
-    public Response omimUpdate() {
+    public Response omimAdd() {
+
+        Neo4j.createConstraint(graphDb, VariantDatabase.getDisorderLabel(), "disorder");
 
         try {
 
             String inputLine;
-            Node symbolNode;
-            URL omimFtp = new URL("ftp://anonymous:matt.lyon%40wales.nhs.uk@ftp.omim.org/OMIM/morbidmap");
+            Node symbolNode, disorderNode;
+            URL omimFtp = new URL("http://data.omim.org/downloads/NFUI_mdqQbaQADxKesNmgg/morbidmap.txt");
             BufferedReader in = new BufferedReader(new InputStreamReader(omimFtp.openStream()));
 
-            while ((inputLine = in.readLine()) != null){
+            //add to database
+            try (Transaction tx = graphDb.beginTx()) {
+                while ((inputLine = in.readLine()) != null){
 
-                //parse record
-                OmimMorbidMapRecord omimMorbidMapRecord = new OmimMorbidMapRecord(inputLine);
-                omimMorbidMapRecord.parseRecord();
+                    if (Pattern.matches("^#.*", inputLine)) continue;
+                    String[] fields = inputLine.split("\t");
 
-                //add to database
-                try (Transaction tx = graphDb.beginTx()) {
+                    //match or create disorder
+                    ArrayList<Node> disorders = Neo4j.getNodes(graphDb, VariantDatabase.getDisorderLabel(), "disorder", fields[0].trim());
 
-                    //create disorder
-                    Node disorderNode = graphDb.createNode(VariantDatabase.getDisorderLabel());
-                    disorderNode.setProperty("disorder", omimMorbidMapRecord.getDisorder());
+                    if (disorders.size() == 0){
+                        disorderNode = graphDb.createNode(VariantDatabase.getDisorderLabel());
+                        disorderNode.setProperty("disorder", fields[0].trim());
+                    } else {
+                        disorderNode = disorders.get(0);
+                    }
 
-                    for (String symbolId : omimMorbidMapRecord.getSymbols()){
+                    //match or create symbol
+                    for (String field : fields[1].split(",")){
+                        String symbolId = field.trim();
+
                         ArrayList<Node> symbols = Neo4j.getNodes(graphDb, VariantDatabase.getSymbolLabel(), "symbolId", symbolId);
 
                         if (symbols.size() == 0){
@@ -1347,14 +1678,23 @@ public class VariantDatabasePlugin
                             symbolNode = symbols.get(0);
                         }
 
-                        //link symbol and disorder
-                        disorderNode.createRelationshipTo(symbolNode, VariantDatabase.getHasAssociatedSymbol());
+                        //check relationship does not already exist & link symbol and disorder
+                        boolean connected = false;
+                        for (Relationship hasAssociatedSymbolRelationship : disorderNode.getRelationships(Direction.OUTGOING, VariantDatabase.getHasAssociatedSymbol())){
+                            if (hasAssociatedSymbolRelationship.getEndNode().getProperty("symbolId").toString().equals(symbolNode.getProperty("symbolId").toString())){
+                                connected = true;
+                                break;
+                            }
+                        }
+
+                        if (!connected){
+                            disorderNode.createRelationshipTo(symbolNode, VariantDatabase.getHasAssociatedSymbol());
+                        }
 
                     }
 
-                    tx.success();
                 }
-
+                tx.success();
             }
 
             in.close();
@@ -1373,25 +1713,39 @@ public class VariantDatabasePlugin
 
     }
 
+    //todo
     @GET
-    @Path("/clinvar/update")
+    @Path("/clinvar/add")
     @Produces(MediaType.APPLICATION_JSON)
-    public Response clinvarUpdate() {
+    public Response clinvarAdd() {
 
         try {
 
             //todo parse VCF and import classifications
+            // BufferedReader in = new BufferedReader(new InputStreamReader(gzipInputStream));
 
-            String inputLine;
+            //read VCF from clinvar, decompress and import on the fly
+            VCFCodec codec = new VCFCodec();
             URL clinvarFtp = new URL("ftp://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_GRCh37/clinvar.vcf.gz");
             GZIPInputStream gzipInputStream = new GZIPInputStream(clinvarFtp.openStream());
-            BufferedReader in = new BufferedReader(new InputStreamReader(gzipInputStream));
+            LineReader lineReader = LineReaderUtil.fromBufferedStream(gzipInputStream);
+            LineIteratorImpl lineIteratorImpl = new LineIteratorImpl(lineReader);
+            codec.readActualHeader(lineIteratorImpl);
 
-            while ((inputLine = in.readLine()) != null){
-                logger.debug(inputLine);
+            while(lineIteratorImpl.hasNext())
+            {
+                VariantContext variantContext = codec.decode(lineIteratorImpl.next());
+
+                //loop over alternate alleles
+                for (Allele allele : variantContext.getAlternateAlleles()){
+                    for (String clinSig : variantContext.getAttribute("CLNSIG").toString().split("\\|")){
+                        logger.debug(variantContext.getContig() + " " + variantContext.getStart() + " " + variantContext.getReference().getBaseString() + " " + allele.getBaseString() + " " + Integer.parseInt(clinSig));
+                    }
+                }
+
             }
 
-            in.close();
+            lineReader.close();
             gzipInputStream.close();
 
             return Response
@@ -2337,6 +2691,19 @@ public class VariantDatabasePlugin
             if (symbolNode.hasProperty("symbolId")) {
                 jg.writeStringField("symbolId", symbolNode.getProperty("symbolId").toString());
             }
+
+            jg.writeArrayFieldStart("disorders");
+
+            for (Relationship hasAssociatedSymbolRelationship : symbolNode.getRelationships(Direction.INCOMING, VariantDatabase.getHasAssociatedSymbol())){
+                Node disorderNode = hasAssociatedSymbolRelationship.getStartNode();
+
+                jg.writeStartObject();
+                jg.writeStringField("disorder", disorderNode.getProperty("disorder").toString());
+                jg.writeEndObject();
+
+            }
+
+            jg.writeEndArray();
 
         }
     }
