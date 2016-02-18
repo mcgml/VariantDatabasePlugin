@@ -6,12 +6,8 @@ import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 import java.lang.reflect.Method;
-import java.net.HttpURLConnection;
-import java.net.MalformedURLException;
 import java.net.URL;
 import java.nio.charset.Charset;
-import java.text.DateFormat;
-import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.regex.Pattern;
 import java.util.zip.GZIPInputStream;
@@ -27,14 +23,12 @@ import htsjdk.tribble.readers.LineReaderUtil;
 import htsjdk.variant.variantcontext.Allele;
 import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.vcf.VCFCodec;
-import htsjdk.variant.vcf.VCFFileReader;
 import org.codehaus.jackson.JsonEncoding;
 import org.codehaus.jackson.JsonGenerator;
 import org.codehaus.jackson.map.ObjectMapper;
 import org.neo4j.graphdb.*;
 
 import org.neo4j.graphdb.traversal.*;
-import org.parboiled.support.Var;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -138,17 +132,12 @@ public class VariantDatabasePlugin
                     //print method names with get or post annotations
                     for (Method method : methods){
                         if (method.isAnnotationPresent(Workflow.class) && !method.isAnnotationPresent(Deprecated.class)){
-
                             jg.writeStartObject();
 
-                            jg.writeFieldName("name");
-                            jg.writeString(method.getAnnotation(Workflow.class).name());
-
-                            jg.writeFieldName("description");
-                            jg.writeString(method.getAnnotation(Workflow.class).description());
+                            jg.writeStringField("name", method.getAnnotation(Workflow.class).name());
+                            jg.writeStringField("description", method.getAnnotation(Workflow.class).description());
 
                             jg.writeEndObject();
-
                         }
                     }
 
@@ -196,16 +185,12 @@ public class VariantDatabasePlugin
                                 for (Relationship relationship : sampleNode.getRelationships(Direction.OUTGOING, VariantDatabase.getHasAnalysisRelationship())) {
                                     Node runInfoNode = relationship.getEndNode();
 
-                                    if (runInfoNode.hasLabel(VariantDatabase.getRunInfoLabel())){
+                                    jg.writeStartObject();
 
-                                        jg.writeStartObject();
+                                    writeSampleInformation(sampleNode, jg);
+                                    writeRunInformation(runInfoNode, jg);
 
-                                        writeSampleInformation(sampleNode, jg);
-                                        writeRunInformation(runInfoNode, jg);
-
-                                        jg.writeEndObject();
-
-                                    }
+                                    jg.writeEndObject();
                                 }
                             }
 
@@ -255,9 +240,7 @@ public class VariantDatabasePlugin
                                 Node virtualPanelNode = virtualPanelNodes.next();
 
                                 jg.writeStartObject();
-
                                 writeVirtualPanelInformation(virtualPanelNode, jg);
-
                                 jg.writeEndObject();
 
                             }
@@ -286,8 +269,6 @@ public class VariantDatabasePlugin
 
     }
 
-
-    //todo here!
     @POST
     @Path("/panels/info")
     @Consumes(MediaType.APPLICATION_JSON)
@@ -315,13 +296,9 @@ public class VariantDatabasePlugin
                         for (Relationship containsSymbol : panelNode.getRelationships(Direction.OUTGOING, VariantDatabase.getContainsSymbolRelationship())){
                             Node symbolNode = containsSymbol.getEndNode();
 
-                            if (symbolNode.hasLabel(VariantDatabase.getSymbolLabel())){
-
-                                jg.writeStartObject();
-                                writeSymbolInformation(symbolNode, jg);
-                                jg.writeEndObject();
-
-                            }
+                            jg.writeStartObject();
+                            writeSymbolInformation(symbolNode, jg);
+                            jg.writeEndObject();
 
                         }
 
@@ -354,33 +331,24 @@ public class VariantDatabasePlugin
 
         try {
 
-            HashMap<String, Object> properties = new HashMap<>();
             Parameters parameters = objectMapper.readValue(json, Parameters.class);
 
             try (Transaction tx = graphDb.beginTx()) {
                 Node userNode = graphDb.getNodeById(parameters.userNodeId);
+                if (!userNode.hasLabel(VariantDatabase.getUserLabel())) throw new WrongLabelException("Expected " + VariantDatabase.getUserLabel().name() + " got " + userNode.getLabels().toString());
 
-                if (userNode.hasLabel(VariantDatabase.getUserLabel())) {
+                //make panel node
+                Node virtualPanelNode = graphDb.createNode(VariantDatabase.getVirtualPanelLabel());
+                virtualPanelNode.setProperty("virtualPanelName", parameters.virtualPanelName);
 
-                    //make panel node
-                    properties.put("virtualPanelName", parameters.virtualPanelName);
-                    Node virtualPanelNode = Neo4j.addNode(graphDb, VariantDatabase.getVirtualPanelLabel(), properties);
+                //link to user
+                Relationship designedByRelationship = virtualPanelNode.createRelationshipTo(userNode, VariantDatabase.getDesignedByRelationship());
+                designedByRelationship.setProperty("date", new Date().getTime());
 
-                    //link to user
-                    Relationship designedByRelationship = virtualPanelNode.createRelationshipTo(userNode, VariantDatabase.getDesignedByRelationship());
-                    designedByRelationship.setProperty("date", new Date().getTime());
-
-                    //link to genes
-                    for (String gene : parameters.virtualPanelList) {
-
-                        //match or create gene
-                        Node geneNode = Neo4j.matchOrCreateUniqueNode(graphDb, VariantDatabase.getSymbolLabel(), "symbolId", gene);
-
-                        //link to virtual panel
-                        virtualPanelNode.createRelationshipTo(geneNode, VariantDatabase.getContainsSymbolRelationship());
-                    }
-
-
+                //link to genes
+                for (String gene : parameters.virtualPanelList) {
+                    Node geneNode = Neo4j.matchOrCreateUniqueNode(graphDb, VariantDatabase.getSymbolLabel(), "symbolId", gene); //match or create gene
+                    virtualPanelNode.createRelationshipTo(geneNode, VariantDatabase.getContainsSymbolRelationship()); //link to virtual panel
                 }
 
                 tx.success();
@@ -607,6 +575,9 @@ public class VariantDatabasePlugin
 
                     //exec workflow
                     switch (parameters.workflowName) {
+                        case "Rare Variant Workflow v1":
+                            runRareVariantWorkflowv1(jg, excludeRunInfoNodes, includePanelNodes, runInfoNode);
+                            break;
                         case "Autosomal Dominant Workflow v1":
                             runAutosomalDominantWorkflowv1(jg, excludeRunInfoNodes, includePanelNodes, runInfoNode);
                             break;
@@ -640,6 +611,8 @@ public class VariantDatabasePlugin
         }
     }
 
+
+    //todo here
     @GET
     @Path("/variant/pendingauth")
     @Produces(MediaType.APPLICATION_JSON)
@@ -1460,8 +1433,6 @@ public class VariantDatabasePlugin
                         Node sampleNode = runInfoNode.getSingleRelationship(VariantDatabase.getHasAnalysisRelationship(), Direction.INCOMING).getStartNode();
 
                         //headers
-                        //jg.writeRaw("#Variant Report v" + version + "\n");
-                        //jg.writeRaw("#Created " + graphDb.getNodeById(parameters.userNodeId).getProperty("fullName") + " " + dateFormat.format(new Date()) + "\n");
                         jg.writeRaw("SampleId,WorklistId,Variant,Genotype,Quality,Occurrence,dbSNP,GERP++,PhyloP,PhastCons,");
 
                         //print pop freq header
@@ -1722,7 +1693,6 @@ public class VariantDatabasePlugin
         try {
 
             //todo parse VCF and import classifications
-            // BufferedReader in = new BufferedReader(new InputStreamReader(gzipInputStream));
 
             //read VCF from clinvar, decompress and import on the fly
             VCFCodec codec = new VCFCodec();
@@ -1763,6 +1733,107 @@ public class VariantDatabasePlugin
     }
 
     /*workflows*/
+    @Workflow(name = "Rare Variant Workflow v1", description = "A workflow to prioritise rare calls")
+    public void runRareVariantWorkflowv1(JsonGenerator jg, HashSet<Long> excludeRunInfoNodes, HashSet<Long> includePanelNodes, Node runInfoNode) throws IOException {
+
+        boolean includeCallsFromPanel = false, excludeCallsFromSample = false;
+        int class1Calls = 0, not1KGRareVariants = 0, notExACRareVariants = 0, notSevereVariants = 0, passVariants = 0, total = 0;
+
+        if (includePanelNodes.size() > 0) includeCallsFromPanel = true;
+        if (excludeRunInfoNodes.size() > 0) excludeCallsFromSample = true;
+
+        jg.writeStartObject();
+
+        jg.writeFieldName("variants");
+        jg.writeStartArray();
+
+        try (Transaction tx = graphDb.beginTx()) {
+
+            for (Relationship inheritanceRel : runInfoNode.getRelationships(Direction.OUTGOING)) {
+                Node variantNode = inheritanceRel.getEndNode();
+
+                //check if variant belongs to supplied panel
+                if (includeCallsFromPanel && !variantBelongsToVirtualPanel(variantNode, includePanelNodes)){
+                    continue;
+                }
+
+                //check if variant is not present in exclusion samples
+                if (excludeCallsFromSample && variantPresentInExclusionSamples(variantNode, excludeRunInfoNodes)){
+                    continue;
+                }
+
+                jg.writeStartObject();
+
+                writeVariantInformation(variantNode, jg);
+                jg.writeStringField("inheritance", getVariantInheritance(inheritanceRel.getType().name()));
+                jg.writeNumberField("quality", (short) inheritanceRel.getProperty("quality"));
+
+                //stratify variants
+                Node lastActiveEventNode = getLastActiveUserEventNode(variantNode);
+                if (lastActiveEventNode != null && (int) lastActiveEventNode.getProperty("classification") == 1) {
+                    jg.writeNumberField("filter", 0);
+                    class1Calls++;
+                } else if (!isExACRareVariant(variantNode, 0.01)) {
+                    jg.writeNumberField("filter", 1);
+                    notExACRareVariants++;
+                } else if (!is1KGRareVariant(variantNode, 0.01)) {
+                    jg.writeNumberField("filter", 2);
+                    not1KGRareVariants++;
+                } else if (!variantHasSevereConsequence(variantNode)) {
+                    jg.writeNumberField("filter", 3);
+                    notSevereVariants++;
+                } else {
+                    jg.writeNumberField("filter", 4);
+                    passVariants++;
+                }
+
+                total++;
+
+                jg.writeEndObject();
+
+            }
+
+        }
+
+        jg.writeEndArray();
+
+        //write filters
+        jg.writeFieldName("filters");
+        jg.writeStartArray();
+
+        jg.writeStartObject();
+        jg.writeStringField("key", "Class 1");
+        jg.writeNumberField("y", class1Calls);
+        jg.writeEndObject();
+
+        jg.writeStartObject();
+        jg.writeStringField("key", "ExAC >1% Frequency");
+        jg.writeNumberField("y", notExACRareVariants);
+        jg.writeEndObject();
+
+        jg.writeStartObject();
+        jg.writeStringField("key", "1KG >1% Frequency");
+        jg.writeNumberField("y", not1KGRareVariants);
+        jg.writeEndObject();
+
+        jg.writeStartObject();
+        jg.writeStringField("key", "Not Severe");
+        jg.writeNumberField("y", notSevereVariants);
+        jg.writeEndObject();
+
+        jg.writeStartObject();
+        jg.writeStringField("key", "Pass");
+        jg.writeNumberField("y", passVariants);
+        jg.writeEndObject();
+
+        jg.writeEndArray();
+
+        jg.writeNumberField("total", total);
+
+        jg.writeEndObject();
+
+    }
+
     @Workflow(name = "Autosomal Dominant Workflow v1", description = "A workflow to prioritise rare autosomal heterozygous calls")
     public void runAutosomalDominantWorkflowv1(JsonGenerator jg, HashSet<Long> excludeRunInfoNodes, HashSet<Long> includePanelNodes, Node runInfoNode) throws IOException {
 
@@ -2614,6 +2685,7 @@ public class VariantDatabasePlugin
     /*write functions*/
     private void writeFullUserInformation(Node userNode, JsonGenerator jg) throws IOException {
         try (Transaction tx = graphDb.beginTx()) {
+            if (!userNode.hasLabel(VariantDatabase.getUserLabel())) throw new WrongLabelException("Expected " + VariantDatabase.getUserLabel().name() + " got " + userNode.getLabels().toString());
 
             jg.writeNumberField("userNodeId", userNode.getId());
 
@@ -2629,6 +2701,7 @@ public class VariantDatabasePlugin
     }
     private void writeLiteUserInformation(Node userNode, JsonGenerator jg) throws IOException {
         try (Transaction tx = graphDb.beginTx()) {
+            if (!userNode.hasLabel(VariantDatabase.getUserLabel())) throw new WrongLabelException("Expected " + VariantDatabase.getUserLabel().name() + " got " + userNode.getLabels().toString());
 
             jg.writeNumberField("userNodeId", userNode.getId());
             if (userNode.hasProperty("admin")) jg.writeBooleanField("admin", (boolean) userNode.getProperty("admin"));
@@ -2638,6 +2711,8 @@ public class VariantDatabasePlugin
     }
     private void writeSampleInformation(Node sampleNode, JsonGenerator jg) throws IOException {
         try (Transaction tx = graphDb.beginTx()) {
+            if (!sampleNode.hasLabel(VariantDatabase.getSampleLabel())) throw new WrongLabelException("Expected " + VariantDatabase.getSampleLabel().name() + " got " + sampleNode.getLabels().toString());
+
             jg.writeNumberField("sampleNodeId", sampleNode.getId());
             jg.writeStringField("sampleId", sampleNode.getProperty("sampleId").toString());
             jg.writeStringField("tissue", sampleNode.getProperty("tissue").toString());
@@ -2645,6 +2720,7 @@ public class VariantDatabasePlugin
     }
     private void writeRunInformation(Node runInfoNode, JsonGenerator jg) throws IOException {
         try (Transaction tx = graphDb.beginTx()) {
+            if (!runInfoNode.hasLabel(VariantDatabase.getRunInfoLabel())) throw new WrongLabelException("Expected " + VariantDatabase.getRunInfoLabel().name() + " got " + runInfoNode.getLabels().toString());
 
             jg.writeNumberField("runInfoNodeId", runInfoNode.getId());
 
@@ -2667,6 +2743,7 @@ public class VariantDatabasePlugin
     }
     private void writeVirtualPanelInformation(Node virtualPanelNode, JsonGenerator jg) throws IOException {
         try (Transaction tx = graphDb.beginTx()) {
+            if (!virtualPanelNode.hasLabel(VariantDatabase.getVirtualPanelLabel())) throw new WrongLabelException("Expected " + VariantDatabase.getVirtualPanelLabel().name() + " got " + virtualPanelNode.getLabels().toString());
 
             Relationship designedByRelationship = virtualPanelNode.getSingleRelationship(VariantDatabase.getDesignedByRelationship(), Direction.OUTGOING);
             Node userNode = designedByRelationship.getEndNode();
@@ -2685,6 +2762,7 @@ public class VariantDatabasePlugin
     }
     private void writeSymbolInformation(Node symbolNode, JsonGenerator jg) throws IOException {
         try (Transaction tx = graphDb.beginTx()) {
+            if (!symbolNode.hasLabel(VariantDatabase.getSymbolLabel())) throw new WrongLabelException("Expected " + VariantDatabase.getSymbolLabel().name() + " got " + symbolNode.getLabels().toString());
 
             jg.writeNumberField("symbolNodeId", symbolNode.getId());
 
@@ -2708,8 +2786,10 @@ public class VariantDatabasePlugin
         }
     }
     private void writeFeatureInformation(Node featureNode, JsonGenerator jg) throws IOException {
-        Node lastActiveEventNode = getLastActiveUserEventNode(featureNode);
         try (Transaction tx = graphDb.beginTx()) {
+            if (!featureNode.hasLabel(VariantDatabase.getFeatureLabel())) throw new WrongLabelException("Expected " + VariantDatabase.getFeatureLabel().name() + " got " + featureNode.getLabels().toString());
+
+            Node lastActiveEventNode = getLastActiveUserEventNode(featureNode);
 
             jg.writeNumberField("featureNodeId", featureNode.getId());
 
@@ -2741,9 +2821,10 @@ public class VariantDatabasePlugin
         }
     }
     private void writeVariantInformation(Node variantNode, JsonGenerator jg) throws IOException {
-        Node lastActiveEventNode = getLastActiveUserEventNode(variantNode);
-
         try (Transaction tx = graphDb.beginTx()) {
+            if (!variantNode.hasLabel(VariantDatabase.getVariantLabel())) throw new WrongLabelException("Expected " + VariantDatabase.getVariantLabel().name() + " got " + variantNode.getLabels().toString());
+
+            Node lastActiveEventNode = getLastActiveUserEventNode(variantNode);
 
             jg.writeNumberField("variantNodeId", variantNode.getId());
             jg.writeNumberField("occurrence", getGlobalVariantOccurrence(variantNode));
@@ -2793,6 +2874,7 @@ public class VariantDatabasePlugin
         String[] domainSources = {"pfamDomain", "hmmpanther", "prosite", "superfamilyDomains"};
 
         try (Transaction tx = graphDb.beginTx()) {
+            if (!annotationNode.hasLabel(VariantDatabase.getAnnotationLabel())) throw new WrongLabelException("Expected " + VariantDatabase.getAnnotationLabel().name() + " got " + annotationNode.getLabels().toString());
 
             jg.writeNumberField("annotationNodeId", annotationNode.getId());
 
