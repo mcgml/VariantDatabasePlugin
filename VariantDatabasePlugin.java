@@ -26,6 +26,7 @@ import htsjdk.variant.vcf.VCFCodec;
 import org.codehaus.jackson.JsonEncoding;
 import org.codehaus.jackson.JsonGenerator;
 import org.codehaus.jackson.map.ObjectMapper;
+import org.codehaus.jackson.map.util.ArrayBuilders;
 import org.neo4j.graphdb.*;
 
 import org.neo4j.graphdb.traversal.*;
@@ -40,6 +41,42 @@ public class VariantDatabasePlugin
     private enum UserEventStatus {
         PENDING_AUTH, ACTIVE, REJECTED
     }
+    public enum ClinVarCode {
+        UncertainSignificance(0),
+        NotProvided(1),
+        Benign(2),
+        LikelyBenign(3),
+        LikelyPathogenic(4),
+        Pathogenic(5),
+        DrugResponse(6),
+        Histocompatibility(7),
+        Other(255);
+
+        private int code;
+
+        private ClinVarCode(int code) {
+            this.code = code;
+        }
+
+        public int getCode() { return code; }
+
+        public static ClinVarCode get(int code) {
+            switch(code) {
+                case  0: return UncertainSignificance;
+                case  1: return NotProvided;
+                case  2: return Benign;
+                case  3: return LikelyBenign;
+                case  4: return LikelyPathogenic;
+                case  5: return Pathogenic;
+                case  6: return DrugResponse;
+                case  7: return Histocompatibility;
+                case  255: return Other;
+            }
+            return null;
+        }
+
+    }
+
     private GraphDatabaseService graphDb;
     private final ObjectMapper objectMapper;
     private Method[] methods;
@@ -611,8 +648,6 @@ public class VariantDatabasePlugin
         }
     }
 
-
-    //todo here
     @GET
     @Path("/variant/pendingauth")
     @Produces(MediaType.APPLICATION_JSON)
@@ -1445,7 +1480,7 @@ public class VariantDatabasePlugin
                         }
                         jg.writeRaw("Max_ExAC\t");
 
-                        jg.writeRaw("Gene\tTranscript\tTranscriptType\tTranscriptBiotype\tCanonicalTranscript\tPreferredTranscript\tConsequence\tSevere\tOMIM\tInternalClass\tHGVSc\tHGVSp\tLocation\tSIFT\tPolyPhen\tCodons\n");
+                        jg.writeRaw("Gene\tTranscript\tTranscriptType\tTranscriptBiotype\tCanonicalTranscript\tPreferredTranscript\tConsequence\tSevere\tOMIM\tInternalClass\tClinVar\tHGVSc\tHGVSp\tLocation\tSIFT\tPolyPhen\tCodons\n");
 
                         //loop over variants node ids
                         for (long variantNodeId : parameters.variantNodeIds){
@@ -1561,6 +1596,15 @@ public class VariantDatabasePlugin
                                                             }
                                                             jg.writeRaw("\t");
 
+                                                            if (variantNode.hasProperty("clinvar")){
+                                                                int[] clinvarCodes = (int[]) variantNode.getProperty("clinvar");
+                                                                for (int i = 0; i < clinvarCodes.length; ++i){
+                                                                    jg.writeRaw(ClinVarCode.get(clinvarCodes[i]).name());
+                                                                    if (i != clinvarCodes.length - 1) jg.writeRaw(";");
+                                                                }
+                                                            }
+                                                            jg.writeRaw("\t");
+
                                                             if (annotationNode.hasProperty("hgvsc")) jg.writeRaw(annotationNode.getProperty("hgvsc").toString() + "\t"); else jg.writeRaw("\t");
                                                             if (annotationNode.hasProperty("hgvsp")) jg.writeRaw(annotationNode.getProperty("hgvsp").toString() + "\t"); else jg.writeRaw("\t");
 
@@ -1610,7 +1654,6 @@ public class VariantDatabasePlugin
         }
     }
 
-    //todo
     @GET
     @Path("/omim/add")
     @Produces(MediaType.APPLICATION_JSON)
@@ -1690,39 +1733,85 @@ public class VariantDatabasePlugin
 
     }
 
-    //todo
     @GET
     @Path("/clinvar/add")
     @Produces(MediaType.APPLICATION_JSON)
     public Response clinvarAdd() {
+        VCFCodec codec = new VCFCodec();
 
-        try {
-
-            //todo parse VCF and import classifications
-
-            //read VCF from clinvar, decompress and import on the fly
-            VCFCodec codec = new VCFCodec();
-            URL clinvarFtp = new URL("ftp://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_GRCh37/clinvar.vcf.gz");
-            GZIPInputStream gzipInputStream = new GZIPInputStream(clinvarFtp.openStream());
-            LineReader lineReader = LineReaderUtil.fromBufferedStream(gzipInputStream);
-            LineIteratorImpl lineIteratorImpl = new LineIteratorImpl(lineReader);
+        //read VCF from clinvar, decompress and import on the fly
+        try (LineIteratorImpl lineIteratorImpl = new LineIteratorImpl(LineReaderUtil.fromBufferedStream(new GZIPInputStream(new URL("ftp://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_GRCh37/clinvar.vcf.gz").openStream())))) {
             codec.readActualHeader(lineIteratorImpl);
 
             while(lineIteratorImpl.hasNext())
             {
                 VariantContext variantContext = codec.decode(lineIteratorImpl.next());
 
-                //loop over alternate alleles
-                for (Allele allele : variantContext.getAlternateAlleles()){
-                    for (String clinSig : variantContext.getAttribute("CLNSIG").toString().split("\\|")){
-                        logger.debug(variantContext.getContig() + " " + variantContext.getStart() + " " + variantContext.getReference().getBaseString() + " " + allele.getBaseString() + " " + Integer.parseInt(clinSig));
+                if (variantContext.getAttribute("CLNALLE") instanceof String) {
+                    if (variantContext.getAttribute("CLNSIG") == null) continue; //not always present
+
+                    int clinAllele = Integer.parseInt((String) variantContext.getAttribute("CLNALLE"));
+                    if (clinAllele == -1) continue; //A value of -1 indicates that no allele was found to match a corresponding HGVS allele name
+                    String clinSig = (String) variantContext.getAttribute("CLNSIG");
+
+                    GenomeVariant genomeVariant = new GenomeVariant(variantContext.getContig(), variantContext.getStart(), variantContext.getReference().getBaseString(), variantContext.getAlleles().get(clinAllele).getBaseString());
+                    genomeVariant.convertToMinimalRepresentation();
+
+                    ArrayList<Node> nodes = Neo4j.getNodes(graphDb, VariantDatabase.getVariantLabel(), "variantId", genomeVariant.getConcatenatedVariant());
+
+                    if (nodes.size() == 1){
+
+                        String[] clinSigsString = clinSig.split("\\|");
+                        int[] clinSigsInt = new int[clinSigsString.length];
+
+                        for (int i = 0; i < clinSigsString.length; ++i){
+                            clinSigsInt[i] = Integer.parseInt(clinSigsString[i]);
+                        }
+
+                        try (Transaction tx = graphDb.beginTx()) {
+                            nodes.get(0).setProperty("clinvar", clinSigsInt);
+                            tx.success();
+                        }
+
                     }
+
+                } else if (variantContext.getAttribute("CLNALLE") instanceof ArrayList) {
+                    if (variantContext.getAttribute("CLNSIG") == null) continue; //not always present
+
+                    ArrayList<String> clinSigs = (ArrayList<String>) variantContext.getAttribute("CLNSIG");
+                    ArrayList<String> clinAlleles = (ArrayList<String>) variantContext.getAttribute("CLNALLE");
+
+                    for (int n = 0; n < clinAlleles.size(); ++n){
+
+                        int clinAllele = Integer.parseInt(clinAlleles.get(n));
+                        if (clinAllele == -1) continue; //A value of -1 indicates that no allele was found to match a corresponding HGVS allele name
+
+                        GenomeVariant genomeVariant = new GenomeVariant(variantContext.getContig(), variantContext.getStart(), variantContext.getReference().getBaseString(), variantContext.getAlleles().get(clinAllele).getBaseString());
+                        genomeVariant.convertToMinimalRepresentation();
+
+                        ArrayList<Node> nodes = Neo4j.getNodes(graphDb, VariantDatabase.getVariantLabel(), "variantId", genomeVariant.getConcatenatedVariant());
+
+                        if (nodes.size() == 1){
+
+                            String[] clinSigsString = clinSigs.get(n).split("\\|");
+                            int[] clinSigsInt = new int[clinSigsString.length];
+
+                            for (int i = 0; i < clinSigsString.length; ++i){
+                                clinSigsInt[i] = Integer.parseInt(clinSigsString[i]);
+                            }
+
+                            try (Transaction tx = graphDb.beginTx()) {
+                                nodes.get(0).setProperty("clinvar", clinSigsInt);
+                                tx.success();
+                            }
+
+                        }
+
+                    }
+
                 }
 
             }
-
-            lineReader.close();
-            gzipInputStream.close();
 
             return Response
                     .status(Response.Status.OK)
@@ -2380,6 +2469,14 @@ public class VariantDatabasePlugin
                 return true;
             case "START_LOST":
                 return true;
+            case "CODING_SEQUENCE_VARIANT":
+                return true;
+            case "STOP_RETAINED_VARIANT":
+                return true;
+            case "PROTEIN_ALTERING_VARIANT":
+                return true;
+            case "INCOMPLETE_TERMINAL_CODON_VARIANT":
+                return true;
             default:
                 return null;
         }
@@ -2872,6 +2969,15 @@ public class VariantDatabasePlugin
                 }
             }
             jg.writeBooleanField("severe", variantHasSevereConsequence(variantNode));
+            if (variantNode.hasProperty("clinvar")) {
+                jg.writeArrayFieldStart("clinvar");
+
+                for (int clinSig : (int[]) variantNode.getProperty("clinvar")){
+                    jg.writeNumber(clinSig);
+                }
+
+                jg.writeEndArray();
+            }
 
         }
     }
