@@ -8,6 +8,8 @@ import java.lang.annotation.Target;
 import java.lang.reflect.Method;
 import java.net.URL;
 import java.nio.charset.Charset;
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.regex.Pattern;
 import java.util.zip.GZIPInputStream;
@@ -1461,6 +1463,7 @@ public class VariantDatabasePlugin
                     JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
                     Parameters parameters = objectMapper.readValue(json, Parameters.class);
                     float maxAf;
+                    DateFormat dateFormat = new SimpleDateFormat("dd/MM/yy HH:mm:ss");
 
                     try (Transaction tx = graphDb.beginTx()) {
 
@@ -1468,7 +1471,10 @@ public class VariantDatabasePlugin
                         Node sampleNode = runInfoNode.getSingleRelationship(VariantDatabase.getHasAnalysisRelationship(), Direction.INCOMING).getStartNode();
 
                         //headers
-                        jg.writeRaw("SampleId\tWorklistId\tVariant\tGenotype\tQuality\tOccurrence\tdbSNP\tGERP++\tPhyloP\tPhastCons\t");
+                        jg.writeRaw("#Variant Report v1\n");
+                        jg.writeRaw("#Created " + graphDb.getNodeById(parameters.userNodeId).getProperty("fullName") + " " + dateFormat.format(new Date()) + "\n");
+                        jg.writeRaw("#" + parameters.workflowName + " \n");
+                        jg.writeRaw("#SampleId\tWorklistId\tVariant\tGenotype\tQuality\tOccurrence\tdbSNP\tGERP++\tPhyloP\tPhastCons\t");
 
                         //print pop freq header
                         for (VariantDatabase.kGPhase3Population population : VariantDatabase.kGPhase3Population.values()) {
@@ -1865,20 +1871,24 @@ public class VariantDatabasePlugin
 
                 //stratify variants
                 Node lastActiveEventNode = getLastActiveUserEventNode(variantNode);
-                if (lastActiveEventNode != null && (int) lastActiveEventNode.getProperty("classification") == 1) {
-                    jg.writeNumberField("filter", 0);
-                    class1Calls++;
+                if (lastActiveEventNode != null && lastActiveEventNode.hasProperty("classification")) {
+
+                    if ((int) lastActiveEventNode.getProperty("classification") == 1){
+                        jg.writeNumberField("filter", 0);
+                        class1Calls++;
+                    } else {
+                        jg.writeNumberField("filter", 3);
+                        passVariants++;
+                    }
+
                 } else if (!isExACRareVariant(variantNode, 0.01)) {
                     jg.writeNumberField("filter", 1);
                     notExACRareVariants++;
                 } else if (!is1KGRareVariant(variantNode, 0.01)) {
                     jg.writeNumberField("filter", 2);
                     not1KGRareVariants++;
-                } else if (!variantHasSevereConsequence(variantNode)) {
-                    jg.writeNumberField("filter", 3);
-                    notSevereVariants++;
                 } else {
-                    jg.writeNumberField("filter", 4);
+                    jg.writeNumberField("filter", 3);
                     passVariants++;
                 }
 
@@ -1909,11 +1919,6 @@ public class VariantDatabasePlugin
         jg.writeStartObject();
         jg.writeStringField("key", "1KG >1% Frequency");
         jg.writeNumberField("y", not1KGRareVariants);
-        jg.writeEndObject();
-
-        jg.writeStartObject();
-        jg.writeStringField("key", "Not Severe");
-        jg.writeNumberField("y", notSevereVariants);
         jg.writeEndObject();
 
         jg.writeStartObject();
