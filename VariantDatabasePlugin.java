@@ -14,26 +14,26 @@ import java.util.*;
 import java.util.regex.Pattern;
 import java.util.zip.GZIPInputStream;
 
-import javax.security.auth.login.CredentialException;
-import javax.ws.rs.*;
-import javax.ws.rs.Path;
-import javax.ws.rs.core.*;
-
 import htsjdk.tribble.readers.LineIteratorImpl;
-import htsjdk.tribble.readers.LineReader;
 import htsjdk.tribble.readers.LineReaderUtil;
-import htsjdk.variant.variantcontext.Allele;
 import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.vcf.VCFCodec;
 import org.codehaus.jackson.JsonEncoding;
 import org.codehaus.jackson.JsonGenerator;
 import org.codehaus.jackson.map.ObjectMapper;
-import org.codehaus.jackson.map.util.ArrayBuilders;
 import org.neo4j.graphdb.*;
 
 import org.neo4j.graphdb.traversal.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import javax.security.auth.login.CredentialException;
+import javax.ws.rs.*;
+import javax.ws.rs.Path;
+import javax.ws.rs.core.Context;
+import javax.ws.rs.core.MediaType;
+import javax.ws.rs.core.Response;
+import javax.ws.rs.core.StreamingOutput;
 
 @Path("/variantdatabase")
 public class VariantDatabasePlugin
@@ -56,7 +56,7 @@ public class VariantDatabasePlugin
 
         private int code;
 
-        private ClinVarCode(int code) {
+        ClinVarCode(int code) {
             this.code = code;
         }
 
@@ -1665,8 +1665,6 @@ public class VariantDatabasePlugin
     @Produces(MediaType.APPLICATION_JSON)
     public Response omimAdd() {
 
-        Neo4j.createConstraint(graphDb, VariantDatabase.getDisorderLabel(), "disorder");
-
         try {
 
             String inputLine;
@@ -1740,6 +1738,47 @@ public class VariantDatabasePlugin
     }
 
     @GET
+    @Path("/omim/remove")
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response omimRemove() {
+
+        try {
+
+            try (Transaction tx = graphDb.beginTx()) {
+                try (ResourceIterator<Node> iter = graphDb.findNodes(VariantDatabase.getDisorderLabel())) {
+
+                    while (iter.hasNext()) {
+                        Node disorderNode = iter.next();
+
+                        //delete relationships
+                        for (Relationship hasAssociatedSymbolRelationship : disorderNode.getRelationships(Direction.OUTGOING, VariantDatabase.getHasAssociatedSymbol())){
+                            hasAssociatedSymbolRelationship.delete();
+                        }
+
+                        //delete node
+                        disorderNode.delete();
+
+                    }
+                }
+
+                tx.success();
+            }
+
+            return Response
+                    .status(Response.Status.OK)
+                    .build();
+
+        } catch (Exception e) {
+            logger.error(e.getMessage());
+            return Response
+                    .status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        }
+
+    }
+
+    @GET
     @Path("/clinvar/add")
     @Produces(MediaType.APPLICATION_JSON)
     public Response clinvarAdd() {
@@ -1766,6 +1805,8 @@ public class VariantDatabasePlugin
                     ArrayList<Node> nodes = Neo4j.getNodes(graphDb, VariantDatabase.getVariantLabel(), "variantId", genomeVariant.getConcatenatedVariant());
 
                     if (nodes.size() == 1){
+
+                        logger.info("Adding clinvar to " + genomeVariant.getConcatenatedVariant());
 
                         String[] clinSigsString = clinSig.split("\\|");
                         int[] clinSigsInt = new int[clinSigsString.length];
@@ -1799,6 +1840,8 @@ public class VariantDatabasePlugin
 
                         if (nodes.size() == 1){
 
+                            logger.info("Adding clinvar to " + genomeVariant.getConcatenatedVariant());
+
                             String[] clinSigsString = clinSigs.get(n).split("\\|");
                             int[] clinSigsInt = new int[clinSigsString.length];
 
@@ -1817,6 +1860,42 @@ public class VariantDatabasePlugin
 
                 }
 
+            }
+
+            return Response
+                    .status(Response.Status.OK)
+                    .build();
+
+        } catch (Exception e) {
+            logger.error(e.getMessage());
+            return Response
+                    .status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        }
+
+    }
+
+    @GET
+    @Path("/clinvar/remove")
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response clinvarRemove() {
+        try {
+
+            try (Transaction tx = graphDb.beginTx()) {
+                try (ResourceIterator<Node> iter = graphDb.findNodes(VariantDatabase.getVariantLabel())) {
+
+                    while (iter.hasNext()) {
+                        Node variantNode = iter.next();
+
+                        if (variantNode.hasProperty("clinvar")){
+                            variantNode.removeProperty("clinvar");
+                        }
+
+                    }
+                }
+
+                tx.success();
             }
 
             return Response
