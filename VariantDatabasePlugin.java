@@ -224,12 +224,23 @@ public class VariantDatabasePlugin
                                 for (Relationship relationship : sampleNode.getRelationships(Direction.OUTGOING, VariantDatabase.getHasAnalysisRelationship())) {
                                     Node runInfoNode = relationship.getEndNode();
 
-                                    jg.writeStartObject();
+                                    //check run has passed QC
+                                    Node lastEventNode = getLastUserEventNode(runInfoNode);
 
-                                    writeSampleInformation(sampleNode, jg);
-                                    writeRunInformation(runInfoNode, jg);
+                                    if (lastEventNode.getId() != runInfoNode.getId()){
+                                        UserEventStatus status = getUserEventStatus(lastEventNode);
 
-                                    jg.writeEndObject();
+                                        if (status == UserEventStatus.ACTIVE && (boolean) lastEventNode.getProperty("passOrFail")){
+                                            jg.writeStartObject();
+
+                                            writeSampleInformation(sampleNode, jg);
+                                            writeRunInformation(runInfoNode, jg);
+
+                                            jg.writeEndObject();
+                                        }
+
+                                    }
+
                                 }
                             }
 
@@ -464,6 +475,7 @@ public class VariantDatabasePlugin
 
     }
 
+    //?todo use global count funtion
     @POST
     @Path("/variant/counts")
     @Consumes(MediaType.APPLICATION_JSON)
@@ -487,6 +499,12 @@ public class VariantDatabasePlugin
 
                         for (Relationship inheritanceRel : variantNode.getRelationships(Direction.INCOMING)) {
                             Node runInfoNode = inheritanceRel.getStartNode();
+
+                            //check if run has passed QC
+                            Node qcNode = getLastActiveUserEventNode(runInfoNode);
+                            if (qcNode == null || !(boolean) qcNode.getProperty("passOrFail")){
+                                continue;
+                            }
 
                             if (runInfoNode.hasLabel(VariantDatabase.getRunInfoLabel())){
                                 Node sampleNode = runInfoNode.getSingleRelationship(VariantDatabase.getHasAnalysisRelationship(), Direction.INCOMING).getStartNode();
@@ -1128,13 +1146,25 @@ public class VariantDatabasePlugin
                             while (iter.hasNext()) {
                                 Node runInfoNode = iter.next();
 
-                                if (getLastActiveUserEventNode(runInfoNode) == null){
+                                //check run has passed QC
+                                Node lastEventNode = getLastUserEventNode(runInfoNode);
 
+                                if (lastEventNode.getId() != runInfoNode.getId()){
+                                    UserEventStatus status = getUserEventStatus(lastEventNode);
+
+                                    //skip pending QC
+                                    if (status == UserEventStatus.REJECTED){
+                                        jg.writeStartObject();
+                                        writeSampleInformation(runInfoNode.getSingleRelationship(VariantDatabase.getHasAnalysisRelationship(), Direction.INCOMING).getStartNode(), jg);
+                                        writeRunInformation(runInfoNode, jg);
+                                        jg.writeEndObject();
+                                    }
+
+                                } else {
                                     jg.writeStartObject();
                                     writeSampleInformation(runInfoNode.getSingleRelationship(VariantDatabase.getHasAnalysisRelationship(), Direction.INCOMING).getStartNode(), jg);
                                     writeRunInformation(runInfoNode, jg);
                                     jg.writeEndObject();
-
                                 }
 
                             }
@@ -1187,7 +1217,7 @@ public class VariantDatabasePlugin
                 UserEventStatus status = getUserEventStatus(lastEventNode);
 
                 if (status == UserEventStatus.PENDING_AUTH){
-                    throw new IllegalArgumentException("Cannot add qc result. Auth pending.");
+                    throw new IllegalArgumentException("Cannot add QC result. Auth pending.");
                 }
 
             }
@@ -1224,9 +1254,9 @@ public class VariantDatabasePlugin
     }
 
     @GET
-    @Path("/analyses/pendingqcauth")
+    @Path("/analyses/pendingauth")
     @Produces(MediaType.APPLICATION_JSON)
-    public Response analysesPendingQcAuth() {
+    public Response analysesPendingAuth() {
 
         try {
 
@@ -1260,6 +1290,11 @@ public class VariantDatabasePlugin
                                     writeLiteUserInformation(addedByRelationship.getEndNode(), jg);
                                     jg.writeNumberField("date",(long) addedByRelationship.getProperty("date"));
                                     jg.writeEndObject();
+
+                                    Node runInfoNode = getSubjectNodeFromEventNode(qualityControlNode);
+
+                                    writeRunInformation(runInfoNode, jg);
+                                    writeSampleInformation(runInfoNode.getSingleRelationship(VariantDatabase.getHasAnalysisRelationship(), Direction.INCOMING).getStartNode(), jg);
 
                                     jg.writeEndObject();
 
@@ -1520,7 +1555,7 @@ public class VariantDatabasePlugin
                                                             if (variantNode.hasProperty("variantId")) jg.writeRaw(variantNode.getProperty("variantId").toString() + "\t"); else jg.writeRaw("\t");
                                                             jg.writeRaw(getVariantInheritance(relationship.getType().name()) + "\t");
                                                             if (relationship.hasProperty("quality")) jg.writeRaw(relationship.getProperty("quality").toString() + "\t"); else jg.writeRaw("\t");
-                                                            jg.writeRaw(getGlobalVariantOccurrence(variantNode) + "\t");
+                                                            jg.writeRaw(getGlobalVariantOccurrenceQcPass(variantNode) + "\t");
                                                             if (variantNode.hasProperty("dbSnpId")) jg.writeRaw(variantNode.getProperty("dbSnpId").toString() + "\t"); else jg.writeRaw("\t");
                                                             if (variantNode.hasProperty("gerp")) jg.writeRaw(variantNode.getProperty("gerp").toString() + "\t"); else jg.writeRaw("\t");
                                                             if (variantNode.hasProperty("phyloP")) jg.writeRaw(variantNode.getProperty("phyloP").toString() + "\t"); else jg.writeRaw("\t");
@@ -1917,7 +1952,7 @@ public class VariantDatabasePlugin
     public void runRareVariantWorkflowv1(JsonGenerator jg, HashSet<Long> excludeRunInfoNodes, HashSet<Long> includePanelNodes, Node runInfoNode) throws IOException {
 
         boolean includeCallsFromPanel = false, excludeCallsFromSample = false;
-        int class1Calls = 0, not1KGRareVariants = 0, notExACRareVariants = 0, notSevereVariants = 0, passVariants = 0, total = 0;
+        int class1Calls = 0, not1KGRareVariants = 0, notExACRareVariants = 0, passVariants = 0, total = 0;
 
         if (includePanelNodes.size() > 0) includeCallsFromPanel = true;
         if (excludeRunInfoNodes.size() > 0) excludeCallsFromSample = true;
@@ -1928,8 +1963,13 @@ public class VariantDatabasePlugin
         jg.writeStartArray();
 
         try (Transaction tx = graphDb.beginTx()) {
-
             for (Relationship inheritanceRel : runInfoNode.getRelationships(Direction.OUTGOING)) {
+
+                if (!inheritanceRel.getType().equals(VariantDatabase.getHasHomVariantRelationship()) &&
+                        !inheritanceRel.getType().equals(VariantDatabase.getHasHetVariantRelationship())){
+                    continue;
+                }
+
                 Node variantNode = inheritanceRel.getEndNode();
 
                 //check if variant belongs to supplied panel
@@ -2013,6 +2053,7 @@ public class VariantDatabasePlugin
 
     }
 
+    @Deprecated
     @Workflow(name = "Autosomal Dominant Workflow v1", description = "A workflow to prioritise rare autosomal heterozygous calls")
     public void runAutosomalDominantWorkflowv1(JsonGenerator jg, HashSet<Long> excludeRunInfoNodes, HashSet<Long> includePanelNodes, Node runInfoNode) throws IOException {
 
@@ -2113,6 +2154,7 @@ public class VariantDatabasePlugin
 
     }
 
+    @Deprecated
     @Workflow(name = "Rare Homozygous Workflow v1", description = "A workflow to prioritise rare homozygous calls")
     public void runRareHomozygousWorkflowv1(JsonGenerator jg, HashSet<Long> excludeRunInfoNodes, HashSet<Long> includePanelNodes, Node runInfoNode) throws IOException {
 
@@ -2205,6 +2247,7 @@ public class VariantDatabasePlugin
 
     }
 
+    @Deprecated
     @Workflow(name = "Autosomal Recessive Workflow v1", description = "A workflow to prioritise rare autosomal compound calls")
     public void runAutosomalRecessiveWorkflowv1(JsonGenerator jg, HashSet<Long> excludeRunInfoNodes, HashSet<Long> includePanelNodes, Node runInfoNode) throws IOException {
 
@@ -2411,6 +2454,7 @@ public class VariantDatabasePlugin
 
     }
 
+    @Deprecated
     @Workflow(name = "X Linked Workflow v1", description = "A workflow to prioritise X-linked calls")
     public void runXLinkedWorkflowv1(JsonGenerator jg, HashSet<Long> excludeRunInfoNodes, HashSet<Long> includePanelNodes, Node runInfoNode) throws IOException {
 
@@ -2565,50 +2609,25 @@ public class VariantDatabasePlugin
                 return null;
         }
     }
-    private int getGlobalVariantOccurrence(Node variantNode){
-        int seen = 0;
+    private int getGlobalVariantOccurrenceQcPass(Node variantNode){
+        int occurrence = 0;
 
         try (Transaction tx = graphDb.beginTx()) {
             for (Relationship relationship : variantNode.getRelationships(Direction.INCOMING)) {
-                if (relationship.isType(VariantDatabase.getHasHetVariantRelationship()) && relationship.getStartNode().hasLabel(VariantDatabase.getRunInfoLabel())) {
-                    seen += 1;
-                } else if (relationship.isType(VariantDatabase.getHasHomVariantRelationship()) && relationship.getStartNode().hasLabel(VariantDatabase.getRunInfoLabel())) {
-                    seen += 2;
-                }
-            }
-        }
+                Node runInfoNode = relationship.getStartNode();
 
-        return seen;
-    }
-    private int getAssayVariantOccurrence(Node variantNode, String assay){
-        int seen = 0;
+                if (runInfoNode.hasLabel(VariantDatabase.getRunInfoLabel())) {
 
-        if (assay == null)
-            return 0;
-
-        try (Transaction tx = graphDb.beginTx()) {
-            for (Relationship relationship : variantNode.getRelationships(Direction.INCOMING)) {
-
-                if (relationship.isType(VariantDatabase.getHasHetVariantRelationship())) {
-                    Node runInfoNode = relationship.getStartNode();
-
-                    if (runInfoNode.hasLabel(VariantDatabase.getRunInfoLabel())) {
-                        if (runInfoNode.hasProperty("assay")) {
-                            if (runInfoNode.getProperty("assay").toString().equals(assay)) {
-                                seen += 1;
-                            }
-                        }
+                    //check if run has passed QC
+                    Node qcNode = getLastActiveUserEventNode(runInfoNode);
+                    if (qcNode == null || !(boolean) qcNode.getProperty("passOrFail")){
+                        continue;
                     }
 
-                } else if (relationship.isType(VariantDatabase.getHasHomVariantRelationship())) {
-                    Node runInfoNode = relationship.getStartNode();
-
-                    if (runInfoNode.hasLabel(VariantDatabase.getRunInfoLabel())){
-                        if (runInfoNode.hasProperty("assay")){
-                            if (runInfoNode.getProperty("assay").toString().equals(assay)){
-                                seen += 2;
-                            }
-                        }
+                    if (relationship.isType(VariantDatabase.getHasHetVariantRelationship()) && relationship.getStartNode().hasLabel(VariantDatabase.getRunInfoLabel())) {
+                        occurrence += 1;
+                    } else if (relationship.isType(VariantDatabase.getHasHomVariantRelationship()) && relationship.getStartNode().hasLabel(VariantDatabase.getRunInfoLabel())) {
+                        occurrence += 2;
                     }
 
                 }
@@ -2616,30 +2635,7 @@ public class VariantDatabasePlugin
             }
         }
 
-        return seen;
-    }
-    private int getPanelOccurrence(String assay){
-        int tested = 0;
-
-        try (Transaction tx = graphDb.beginTx()) {
-            try (ResourceIterator<Node> runInfoNodes = graphDb.findNodes(VariantDatabase.getRunInfoLabel())) {
-
-                while (runInfoNodes.hasNext()) {
-                    Node runInfoNode = runInfoNodes.next();
-
-                    if (runInfoNode.hasProperty("assay")){
-                        if (runInfoNode.getProperty("assay").toString().equals(assay)){
-                            tested++;
-                        }
-                    }
-
-                }
-
-                runInfoNodes.close();
-            }
-        }
-
-        return tested;
+        return occurrence;
     }
     private boolean is1KGRareVariant(Node variantNode, double maxAlleleFrequency){
 
@@ -2926,6 +2922,16 @@ public class VariantDatabasePlugin
             if (runInfoNode.hasProperty("remoteBamFilePath"))
                 jg.writeStringField("remoteBamFilePath", runInfoNode.getProperty("remoteBamFilePath").toString());
 
+            //QC
+            if (runInfoNode.hasProperty("GenotypicGender"))
+                jg.writeStringField("GenotypicGender", runInfoNode.getProperty("GenotypicGender").toString());
+            if (runInfoNode.hasProperty("EstimatedContamination"))
+                jg.writeNumberField("EstimatedContamination", (float) runInfoNode.getProperty("EstimatedContamination"));
+            if (runInfoNode.hasProperty("PercentageGt30"))
+                jg.writeNumberField("PercentageGt30", (float) runInfoNode.getProperty("PercentageGt30"));
+            if (runInfoNode.hasProperty("DuplicationRate"))
+                jg.writeNumberField("DuplicationRate", (float) runInfoNode.getProperty("DuplicationRate"));
+
         }
     }
     private void writeVirtualPanelInformation(Node virtualPanelNode, JsonGenerator jg) throws IOException {
@@ -3014,7 +3020,7 @@ public class VariantDatabasePlugin
             Node lastActiveEventNode = getLastActiveUserEventNode(variantNode);
 
             jg.writeNumberField("variantNodeId", variantNode.getId());
-            jg.writeNumberField("occurrence", getGlobalVariantOccurrence(variantNode));
+            jg.writeNumberField("occurrence", getGlobalVariantOccurrenceQcPass(variantNode));
 
             //variant class
             if (lastActiveEventNode != null){
