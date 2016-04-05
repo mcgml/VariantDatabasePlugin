@@ -154,6 +154,41 @@ public class VariantDatabasePlugin
     }
 
     @GET
+    @Path("/diagnostic/warmup")
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response diagnosticWarmup() {
+
+        try {
+
+            try (Transaction tx = graphDb.beginTx()) {
+                Node start;
+
+                for ( Node n : graphDb.getAllNodes() ) {
+                    n.getPropertyKeys();
+                    for ( Relationship relationship : n.getRelationships() ) {
+                        start = relationship.getStartNode();
+                    }
+                }
+
+                for ( Relationship r : graphDb.getAllRelationships() ) {
+                    r.getPropertyKeys();
+                    start = r.getStartNode();
+                }
+            }
+
+            logger.info("Warmed up!");
+            return Response.ok().build();
+        } catch (Exception e) {
+            logger.error(e.getMessage());
+            return Response
+                    .status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity((e.getMessage()).getBytes(Charset.forName("UTF-8")))
+                    .build();
+        }
+
+    }
+
+    @GET
     @Path("/workflows/list")
     @Produces(MediaType.APPLICATION_JSON)
     public Response workflowsInfo() {
