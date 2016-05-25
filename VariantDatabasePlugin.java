@@ -24,8 +24,7 @@ import org.codehaus.jackson.map.ObjectMapper;
 import org.neo4j.graphdb.*;
 
 import org.neo4j.graphdb.traversal.*;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.neo4j.logging.Log;
 
 import javax.security.auth.login.CredentialException;
 import javax.ws.rs.*;
@@ -35,14 +34,20 @@ import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 import javax.ws.rs.core.StreamingOutput;
 
+/**
+ * A class for querying a Neo4j DB with variant data
+ *
+ * @author  Matt Lyon
+ * @version 1.0
+ * @since   2015-06-23
+ */
 @Path("/variantdatabase")
 public class VariantDatabasePlugin
 {
-    private static final Logger logger = LoggerFactory.getLogger(VariantDatabasePlugin.class);
-
     private enum UserEventStatus {
         PENDING_AUTH, ACTIVE, REJECTED
     }
+
     public enum ClinVarCode {
         UncertainSignificance(0),
         NotProvided(1),
@@ -79,12 +84,14 @@ public class VariantDatabasePlugin
 
     }
 
+    private Log logger;
     private GraphDatabaseService graphDb;
     private final ObjectMapper objectMapper;
     private Method[] methods;
 
-    public VariantDatabasePlugin(@Context GraphDatabaseService graphDb)
+    public VariantDatabasePlugin(@Context GraphDatabaseService graphDb, @Context Log logger)
     {
+        this.logger = logger;
         this.graphDb = graphDb;
         this.objectMapper = new ObjectMapper();
         this.methods = this.getClass().getMethods();
@@ -1872,11 +1879,11 @@ public class VariantDatabasePlugin
                     GenomeVariant genomeVariant = new GenomeVariant(variantContext.getContig(), variantContext.getStart(), variantContext.getReference().getBaseString(), variantContext.getAlleles().get(clinAllele).getBaseString());
                     genomeVariant.convertToMinimalRepresentation();
 
-                    ArrayList<Node> nodes = Neo4j.getNodes(graphDb, VariantDatabase.getVariantLabel(), "variantId", genomeVariant.getConcatenatedVariant());
+                    ArrayList<Node> nodes = Neo4j.getNodes(graphDb, VariantDatabase.getVariantLabel(), "variantId", genomeVariant.toString());
 
                     if (nodes.size() == 1){
 
-                        logger.info("Adding clinvar to " + genomeVariant.getConcatenatedVariant());
+                        logger.info("Adding clinvar to " + genomeVariant.toString());
 
                         String[] clinSigsString = clinSig.split("\\|");
                         int[] clinSigsInt = new int[clinSigsString.length];
@@ -1906,11 +1913,11 @@ public class VariantDatabasePlugin
                         GenomeVariant genomeVariant = new GenomeVariant(variantContext.getContig(), variantContext.getStart(), variantContext.getReference().getBaseString(), variantContext.getAlleles().get(clinAllele).getBaseString());
                         genomeVariant.convertToMinimalRepresentation();
 
-                        ArrayList<Node> nodes = Neo4j.getNodes(graphDb, VariantDatabase.getVariantLabel(), "variantId", genomeVariant.getConcatenatedVariant());
+                        ArrayList<Node> nodes = Neo4j.getNodes(graphDb, VariantDatabase.getVariantLabel(), "variantId", genomeVariant.toString());
 
                         if (nodes.size() == 1){
 
-                            logger.info("Adding clinvar to " + genomeVariant.getConcatenatedVariant());
+                            logger.info("Adding clinvar to " + genomeVariant.toString());
 
                             String[] clinSigsString = clinSigs.get(n).split("\\|");
                             int[] clinSigsInt = new int[clinSigsString.length];

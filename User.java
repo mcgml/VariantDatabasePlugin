@@ -1,7 +1,11 @@
 package nhs.genetics.cardiff;
 
 /**
- * Created by ml on 22/12/2015.
+ * A POJO for REST de-serialisation
+ *
+ * @author  Matt Lyon
+ * @version 1.0
+ * @since   2015-12-22
  */
 public class User {
     public String fullName;

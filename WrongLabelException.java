@@ -1,7 +1,11 @@
 package nhs.genetics.cardiff;
 
 /**
- * Created by ml on 16/02/2016.
+ * A exception class for identifying nodes with unexpected labels
+ *
+ * @author  Matt Lyon
+ * @version 1.0
+ * @since   2016-02-16
  */
 public class WrongLabelException extends RuntimeException {
 

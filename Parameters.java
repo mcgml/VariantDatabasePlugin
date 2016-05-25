@@ -1,7 +1,11 @@
 package nhs.genetics.cardiff;
 
 /**
- * Created by ml on 18/10/2015.
+ * A POJO for REST de-serialisation
+ *
+ * @author  Matt Lyon
+ * @version 1.0
+ * @since   2015-10-18
  */
 public class Parameters {
     public String featureId;
