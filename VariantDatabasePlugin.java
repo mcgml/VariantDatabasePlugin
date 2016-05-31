@@ -1537,7 +1537,7 @@ public class VariantDatabasePlugin
                 @Override
                 public void write(OutputStream os) throws IOException, WebApplicationException {
 
-                    JsonGenerator jg = objectMapper.getJsonFactory().createJsonGenerator(os, JsonEncoding.UTF8);
+                    PrintWriter pw = new PrintWriter(os);
                     Parameters parameters = objectMapper.readValue(json, Parameters.class);
                     float maxAf;
                     DateFormat dateFormat = new SimpleDateFormat("dd/MM/yy HH:mm:ss");
@@ -1548,22 +1548,22 @@ public class VariantDatabasePlugin
                         Node sampleNode = runInfoNode.getSingleRelationship(VariantDatabase.getHasAnalysisRelationship(), Direction.INCOMING).getStartNode();
 
                         //headers
-                        jg.writeRaw("#Variant Report v1\n");
-                        jg.writeRaw("#Created " + graphDb.getNodeById(parameters.userNodeId).getProperty("fullName") + " " + dateFormat.format(new Date()) + "\n");
-                        jg.writeRaw("#" + parameters.workflowName + " \n");
-                        jg.writeRaw("#SampleId\tWorklistId\tVariant\tGenotype\tQuality\tOccurrence\tdbSNP\tGERP++\tPhyloP\tPhastCons\t");
+                        pw.print("#Variant Report v1\n");
+                        pw.print("#Created " + graphDb.getNodeById(parameters.userNodeId).getProperty("fullName") + " " + dateFormat.format(new Date()) + "\n");
+                        pw.print("#" + parameters.workflowName + "\n");
+                        pw.print("#SampleId\tWorklistId\tVariant\tGenotype\tQuality\tOccurrence\tdbSNP\tGERP++\tPhyloP\tPhastCons\t");
 
                         //print pop freq header
                         for (VariantDatabase.kGPhase3Population population : VariantDatabase.kGPhase3Population.values()) {
-                            jg.writeRaw("1KG_" + population.toString() + "\t");
+                            pw.print("1KG_" + population.toString() + "\t");
                         }
-                        jg.writeRaw("Max_1KG\t");
+                        pw.print("Max_1KG\t");
                         for (VariantDatabase.exacPopulation population : VariantDatabase.exacPopulation.values()) {
-                            jg.writeRaw("ExAC_" + population.toString() + "\t");
+                            pw.print("ExAC_" + population.toString() + "\t");
                         }
-                        jg.writeRaw("Max_ExAC\t");
+                        pw.print("Max_ExAC\t");
 
-                        jg.writeRaw("Gene\tTranscript\tTranscriptType\tTranscriptBiotype\tCanonicalTranscript\tPreferredTranscript\tConsequence\tSevere\tOMIM\tInternalClass\tClinVar\tHGVSc\tHGVSp\tLocation\tSIFT\tPolyPhen\tCodons\n");
+                        pw.print("Gene\tTranscript\tTranscriptType\tTranscriptBiotype\tCanonicalTranscript\tPreferredTranscript\tConsequence\tSevere\tOMIM\tInternalClass\tClinVar\tHGVSc\tHGVSp\tLocation\tSIFT\tPolyPhen\tCodons\n");
 
                         //loop over variants node ids
                         for (long variantNodeId : parameters.variantNodeIds){
@@ -1590,118 +1590,118 @@ public class VariantDatabasePlugin
                                                         if (symbolNode.hasLabel(VariantDatabase.getSymbolLabel())){
 
                                                             //sample
-                                                            if (sampleNode.hasProperty("sampleId")) jg.writeRaw(sampleNode.getProperty("sampleId").toString() + "\t"); else jg.writeRaw("\t");
-                                                            if (runInfoNode.hasProperty("worklistId")) jg.writeRaw(runInfoNode.getProperty("worklistId").toString() + "\t"); else jg.writeRaw("\t");
+                                                            if (sampleNode.hasProperty("sampleId")) pw.print(sampleNode.getProperty("sampleId").toString() + "\t"); else pw.print("\t");
+                                                            if (runInfoNode.hasProperty("worklistId")) pw.print(runInfoNode.getProperty("worklistId").toString() + "\t"); else pw.print("\t");
 
                                                             //variant
-                                                            if (variantNode.hasProperty("variantId")) jg.writeRaw(variantNode.getProperty("variantId").toString() + "\t"); else jg.writeRaw("\t");
-                                                            jg.writeRaw(getVariantInheritance(relationship.getType().name()) + "\t");
-                                                            if (relationship.hasProperty("quality")) jg.writeRaw(relationship.getProperty("quality").toString() + "\t"); else jg.writeRaw("\t");
-                                                            jg.writeRaw(getGlobalVariantOccurrenceQcPass(variantNode) + "\t");
-                                                            if (variantNode.hasProperty("dbSnpId")) jg.writeRaw(variantNode.getProperty("dbSnpId").toString() + "\t"); else jg.writeRaw("\t");
-                                                            if (variantNode.hasProperty("gerp")) jg.writeRaw(variantNode.getProperty("gerp").toString() + "\t"); else jg.writeRaw("\t");
-                                                            if (variantNode.hasProperty("phyloP")) jg.writeRaw(variantNode.getProperty("phyloP").toString() + "\t"); else jg.writeRaw("\t");
-                                                            if (variantNode.hasProperty("phastCons")) jg.writeRaw(variantNode.getProperty("phastCons").toString() + "\t"); else jg.writeRaw("\t");
+                                                            if (variantNode.hasProperty("variantId")) pw.print(variantNode.getProperty("variantId").toString() + "\t"); else pw.print("\t");
+                                                            pw.print(getVariantInheritance(relationship.getType().name()) + "\t");
+                                                            if (relationship.hasProperty("quality")) pw.print(relationship.getProperty("quality").toString() + "\t"); else pw.print("\t");
+                                                            pw.print(getGlobalVariantOccurrenceQcPass(variantNode) + "\t");
+                                                            if (variantNode.hasProperty("dbSnpId")) pw.print(variantNode.getProperty("dbSnpId").toString() + "\t"); else pw.print("\t");
+                                                            if (variantNode.hasProperty("gerp")) pw.print(variantNode.getProperty("gerp").toString() + "\t"); else pw.print("\t");
+                                                            if (variantNode.hasProperty("phyloP")) pw.print(variantNode.getProperty("phyloP").toString() + "\t"); else pw.print("\t");
+                                                            if (variantNode.hasProperty("phastCons")) pw.print(variantNode.getProperty("phastCons").toString() + "\t"); else pw.print("\t");
 
                                                             //1kg
                                                             maxAf = -1f;
                                                             for (VariantDatabase.kGPhase3Population population : VariantDatabase.kGPhase3Population.values()) {
                                                                 if (variantNode.hasProperty("kGPhase3" + population.toString() + "Af")){
-                                                                    jg.writeRaw(variantNode.getProperty("kGPhase3" + population.toString() + "Af").toString() + "\t");
+                                                                    pw.print(variantNode.getProperty("kGPhase3" + population.toString() + "Af").toString() + "\t");
 
                                                                     float tmp = (float) variantNode.getProperty("kGPhase3" + population.toString() + "Af");
                                                                     if (tmp > maxAf) maxAf = tmp;
 
                                                                 } else {
-                                                                    jg.writeRaw("\t");
+                                                                    pw.print("\t");
                                                                 }
                                                             }
                                                             if (maxAf != -1f){
-                                                                jg.writeRaw(Float.toString(maxAf) + "\t");
+                                                                pw.print(Float.toString(maxAf) + "\t");
                                                             } else {
-                                                                jg.writeRaw("0\t");
+                                                                pw.print("0\t");
                                                             }
 
                                                             //ExAC
                                                             maxAf = -1f;
                                                             for (VariantDatabase.exacPopulation population : VariantDatabase.exacPopulation.values()) {
                                                                 if (variantNode.hasProperty("exac" + population.toString() + "Af")){
-                                                                    jg.writeRaw(variantNode.getProperty("exac" + population.toString() + "Af").toString() + "\t");
+                                                                    pw.print(variantNode.getProperty("exac" + population.toString() + "Af").toString() + "\t");
 
                                                                     float tmp = (float) variantNode.getProperty("exac" + population.toString() + "Af");
                                                                     if (tmp > maxAf) maxAf = tmp;
 
                                                                 } else {
-                                                                    jg.writeRaw("\t");
+                                                                    pw.print("\t");
                                                                 }
                                                             }
                                                             if (maxAf != -1f){
-                                                                jg.writeRaw(Float.toString(maxAf) + "\t");
+                                                                pw.print(Float.toString(maxAf) + "\t");
                                                             } else {
-                                                                jg.writeRaw("0\t");
+                                                                pw.print("0\t");
                                                             }
 
                                                             //gene & transcript
-                                                            if (symbolNode.hasProperty("symbolId")) jg.writeRaw(symbolNode.getProperty("symbolId").toString() + "\t"); else jg.writeRaw("\t");
-                                                            if (featureNode.hasProperty("featureId")) jg.writeRaw(featureNode.getProperty("featureId").toString() + "\t"); else jg.writeRaw("\t");
-                                                            if (featureNode.hasProperty("featureType")) jg.writeRaw(featureNode.getProperty("featureType").toString() + "\t"); else jg.writeRaw("\t");
-                                                            jg.writeRaw(getTranscriptBiotype(biotypeRel.getType().name()) + "\t");
+                                                            if (symbolNode.hasProperty("symbolId")) pw.print(symbolNode.getProperty("symbolId").toString() + "\t"); else pw.print("\t");
+                                                            if (featureNode.hasProperty("featureId")) pw.print(featureNode.getProperty("featureId").toString() + "\t"); else pw.print("\t");
+                                                            if (featureNode.hasProperty("featureType")) pw.print(featureNode.getProperty("featureType").toString() + "\t"); else pw.print("\t");
+                                                            pw.print(getTranscriptBiotype(biotypeRel.getType().name()) + "\t");
 
                                                             //transcript choice
                                                             if (featureNode.hasLabel(VariantDatabase.getCanonicalLabel())) {
-                                                                jg.writeRaw("TRUE\t");
+                                                                pw.print("TRUE\t");
                                                             } else {
-                                                                jg.writeRaw("FALSE\t");
+                                                                pw.print("FALSE\t");
                                                             }
 
                                                             //internal choice
                                                             Node lastActiveEventFeaturePrefNode =  getLastActiveUserEventNode(featureNode);
                                                             if (lastActiveEventFeaturePrefNode != null){
-                                                                jg.writeRaw(lastActiveEventFeaturePrefNode.getProperty("preference").toString() + "\t");
+                                                                pw.print(lastActiveEventFeaturePrefNode.getProperty("preference").toString() + "\t");
                                                             } else {
-                                                                jg.writeRaw("\t");
+                                                                pw.print("\t");
                                                             }
 
                                                             //functional annotations
                                                             String consequence = getFunctionalConsequence(consequenceRel.getType().name());
-                                                            jg.writeRaw(consequence + "\t");
-                                                            jg.writeRaw(isConsequenceSevere(consequence) + "\t");
+                                                            pw.print(consequence + "\t");
+                                                            pw.print(isConsequenceSevere(consequence) + "\t");
 
                                                             //omim
                                                             for (Relationship hasAssociatedSymbol : symbolNode.getRelationships(Direction.INCOMING, VariantDatabase.getHasAssociatedSymbol())){
                                                                 Node disorderNode = hasAssociatedSymbol.getStartNode();
-                                                                jg.writeRaw(disorderNode.getProperty("disorder").toString() + ";");
+                                                                pw.print(disorderNode.getProperty("disorder").toString() + ";");
                                                             }
-                                                            jg.writeRaw("\t");
+                                                            pw.print("\t");
 
                                                             if (lastActiveEventNode != null){
-                                                                jg.writeRaw(lastActiveEventNode.getProperty("classification").toString());
+                                                                pw.print(lastActiveEventNode.getProperty("classification").toString());
                                                             }
-                                                            jg.writeRaw("\t");
+                                                            pw.print("\t");
 
                                                             if (variantNode.hasProperty("clinvar")){
                                                                 int[] clinvarCodes = (int[]) variantNode.getProperty("clinvar");
                                                                 for (int i = 0; i < clinvarCodes.length; ++i){
-                                                                    jg.writeRaw(ClinVarCode.get(clinvarCodes[i]).name());
-                                                                    if (i != clinvarCodes.length - 1) jg.writeRaw(";");
+                                                                    pw.print(ClinVarCode.get(clinvarCodes[i]).name());
+                                                                    if (i != clinvarCodes.length - 1) pw.print(";");
                                                                 }
                                                             }
-                                                            jg.writeRaw("\t");
+                                                            pw.print("\t");
 
-                                                            if (annotationNode.hasProperty("hgvsc")) jg.writeRaw(annotationNode.getProperty("hgvsc").toString() + "\t"); else jg.writeRaw("\t");
-                                                            if (annotationNode.hasProperty("hgvsp")) jg.writeRaw(annotationNode.getProperty("hgvsp").toString() + "\t"); else jg.writeRaw("\t");
+                                                            if (annotationNode.hasProperty("hgvsc")) pw.print(annotationNode.getProperty("hgvsc").toString() + "\t"); else pw.print("\t");
+                                                            if (annotationNode.hasProperty("hgvsp")) pw.print(annotationNode.getProperty("hgvsp").toString() + "\t"); else pw.print("\t");
 
                                                             if (annotationNode.hasProperty("exon")) {
-                                                                jg.writeRaw(annotationNode.getProperty("exon").toString() + "\t");
+                                                                pw.print(annotationNode.getProperty("exon").toString() + "\t");
                                                             } else if (annotationNode.hasProperty("intron")) {
-                                                                jg.writeRaw(annotationNode.getProperty("intron").toString() + "\t");
+                                                                pw.print(annotationNode.getProperty("intron").toString() + "\t");
                                                             } else {
-                                                                jg.writeRaw("\t");
+                                                                pw.print("\t");
                                                             }
 
-                                                            if (annotationNode.hasProperty("sift")) jg.writeRaw(annotationNode.getProperty("sift").toString() + "\t"); else jg.writeRaw("\t");
-                                                            if (annotationNode.hasProperty("polyphen")) jg.writeRaw(annotationNode.getProperty("polyphen").toString() + "\t"); else jg.writeRaw("\t");
-                                                            if (annotationNode.hasProperty("codons")) jg.writeRaw(annotationNode.getProperty("codons").toString() + "\n"); else jg.writeRaw("\n");
+                                                            if (annotationNode.hasProperty("sift")) pw.print(annotationNode.getProperty("sift").toString() + "\t"); else pw.print("\t");
+                                                            if (annotationNode.hasProperty("polyphen")) pw.print(annotationNode.getProperty("polyphen").toString() + "\t"); else pw.print("\t");
+                                                            if (annotationNode.hasProperty("codons")) pw.print(annotationNode.getProperty("codons").toString() + "\n"); else pw.print("\n");
 
                                                         }
 
@@ -1721,8 +1721,8 @@ public class VariantDatabasePlugin
 
                     }
 
-                    jg.flush();
-                    jg.close();
+                    pw.flush();
+                    pw.close();
                 }
 
             };
