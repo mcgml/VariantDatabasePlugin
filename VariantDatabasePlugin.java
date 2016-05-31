@@ -1537,7 +1537,14 @@ public class VariantDatabasePlugin
                 @Override
                 public void write(OutputStream os) throws IOException, WebApplicationException {
 
-                    PrintWriter pw = new PrintWriter(os);
+                    /*Force windows nl*/
+                    PrintWriter pw = new PrintWriter(os) {
+                        @Override
+                        public void println(String x) {
+                            print(x + "\r\n");
+                        }
+                    };
+
                     Parameters parameters = objectMapper.readValue(json, Parameters.class);
                     float maxAf;
                     DateFormat dateFormat = new SimpleDateFormat("dd/MM/yy HH:mm:ss");
@@ -1548,9 +1555,9 @@ public class VariantDatabasePlugin
                         Node sampleNode = runInfoNode.getSingleRelationship(VariantDatabase.getHasAnalysisRelationship(), Direction.INCOMING).getStartNode();
 
                         //headers
-                        pw.print("#Variant Report v1\n");
-                        pw.print("#Created " + graphDb.getNodeById(parameters.userNodeId).getProperty("fullName") + " " + dateFormat.format(new Date()) + "\n");
-                        pw.print("#" + parameters.workflowName + "\n");
+                        pw.println("#Variant Report v1");
+                        pw.println("#Created " + graphDb.getNodeById(parameters.userNodeId).getProperty("fullName") + " " + dateFormat.format(new Date()));
+                        pw.println("#" + parameters.workflowName);
                         pw.print("#SampleId\tWorklistId\tVariant\tGenotype\tQuality\tOccurrence\tdbSNP\tGERP++\tPhyloP\tPhastCons\t");
 
                         //print pop freq header
@@ -1563,7 +1570,7 @@ public class VariantDatabasePlugin
                         }
                         pw.print("Max_ExAC\t");
 
-                        pw.print("Gene\tTranscript\tTranscriptType\tTranscriptBiotype\tCanonicalTranscript\tPreferredTranscript\tConsequence\tSevere\tOMIM\tInternalClass\tClinVar\tHGVSc\tHGVSp\tLocation\tSIFT\tPolyPhen\tCodons\n");
+                        pw.println("Gene\tTranscript\tTranscriptType\tTranscriptBiotype\tCanonicalTranscript\tPreferredTranscript\tConsequence\tSevere\tOMIM\tInternalClass\tClinVar\tHGVSc\tHGVSp\tLocation\tSIFT\tPolyPhen\tCodons");
 
                         //loop over variants node ids
                         for (long variantNodeId : parameters.variantNodeIds){
@@ -1701,7 +1708,7 @@ public class VariantDatabasePlugin
 
                                                             if (annotationNode.hasProperty("sift")) pw.print(annotationNode.getProperty("sift").toString() + "\t"); else pw.print("\t");
                                                             if (annotationNode.hasProperty("polyphen")) pw.print(annotationNode.getProperty("polyphen").toString() + "\t"); else pw.print("\t");
-                                                            if (annotationNode.hasProperty("codons")) pw.print(annotationNode.getProperty("codons").toString() + "\n"); else pw.print("\n");
+                                                            if (annotationNode.hasProperty("codons")) pw.println(annotationNode.getProperty("codons").toString()); else pw.println();
 
                                                         }
 
