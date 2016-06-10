@@ -1543,6 +1543,10 @@ public class VariantDatabasePlugin
                         public void println(String x) {
                             print(x + "\r\n");
                         }
+                        @Override
+                        public void println() {
+                            print("\r\n");
+                        }
                     };
 
                     Parameters parameters = objectMapper.readValue(json, Parameters.class);
